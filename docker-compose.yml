@@ -1,0 +1,91 @@
+version: '3.9'
+
+services:
+
+  db:
+    image: postgres:15-alpine
+    container_name: chatbot_db
+    env_file: .env
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - chatbot_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: chatbot_redis
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - chatbot_network
+
+  # One-time scraper — runs on first deploy then exits
+  scraper:
+    build:
+      context: ./webapp
+      dockerfile: Dockerfile
+    container_name: chatbot_scraper
+    command: >
+      sh -c "
+        python wait_for_db.py &&
+        python manage.py migrate --noinput &&
+        python manage.py load_knowledge &&
+        python manage.py scrape_website --max 500 --delay 0.5 --lang both &&
+        echo 'Scraping complete!'
+      "
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - chatbot_network
+    restart: "no"
+
+  web:
+    build:
+      context: ./webapp
+      dockerfile: Dockerfile
+    container_name: chatbot_web
+    command: >
+      sh -c "
+        python wait_for_db.py &&
+        python manage.py migrate --noinput &&
+        python manage.py load_knowledge &&
+        python manage.py collectstatic --noinput &&
+        python manage.py runserver 0.0.0.0:8000
+      "
+    volumes:
+      - ./webapp:/app
+    ports:
+      - "8002:8000"
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - chatbot_network
+    restart: unless-stopped
+
+networks:
+  chatbot_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
