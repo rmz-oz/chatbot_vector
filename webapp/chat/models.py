@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from pgvector.django import VectorField
 
 
 class KnowledgeEntry(models.Model):
@@ -22,6 +23,9 @@ class KnowledgeEntry(models.Model):
     keywords   = models.TextField(blank=True)
     source_url = models.URLField(max_length=500, blank=True, unique=True)
     scraped_at = models.DateTimeField(default=timezone.now)
+
+    # Vector embedding — 768 dimensions (nomic-embed-text)
+    embedding  = VectorField(dimensions=768, null=True, blank=True)
 
     class Meta:
         ordering = ["category", "title"]

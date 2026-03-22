@@ -33,26 +33,39 @@ services:
     networks:
       - chatbot_network
 
-  # One-time scraper — runs on first deploy then exits
-  scraper:
-    build:
-      context: ./webapp
-      dockerfile: Dockerfile
-    container_name: chatbot_scraper
-    command: >
-      sh -c "
-        python wait_for_db.py &&
-        python manage.py migrate --noinput &&
-        python manage.py load_knowledge &&
-        python manage.py scrape_website --max 500 --delay 0.5 --lang both &&
-        echo 'Scraping complete!'
-      "
-    env_file: .env
+  ollama:
+    image: ollama/ollama:latest
+    container_name: chatbot_ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - chatbot_network
+    restart: unless-stopped
+
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: chatbot_ollama_init
+    volumes:
+      - ollama_data:/root/.ollama
     depends_on:
-      db:
+      ollama:
         condition: service_healthy
     networks:
       - chatbot_network
+    entrypoint: >
+      sh -c "
+        OLLAMA_HOST=ollama ollama pull llama3.2:3b &&
+        OLLAMA_HOST=ollama ollama pull nomic-embed-text &&
+        echo 'All models downloaded.'
+      "
     restart: "no"
 
   web:
@@ -64,12 +77,13 @@ services:
       sh -c "
         python wait_for_db.py &&
         python manage.py migrate --noinput &&
-        python manage.py load_knowledge &&
         python manage.py collectstatic --noinput &&
-        python manage.py runserver 0.0.0.0:8000
+        python manage.py loaddata knowledge_fixture.json.gz &&
+        python manage.py generate_embeddings || echo 'Embedding generation skipped (will retry on next restart)' &&
+        gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120
       "
     volumes:
-      - ./webapp:/app
+      - static_files:/app/staticfiles
     ports:
       - "8002:8000"
     env_file: .env
@@ -78,6 +92,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     networks:
       - chatbot_network
     restart: unless-stopped
@@ -89,3 +107,5 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  static_files:
+  ollama_data:
