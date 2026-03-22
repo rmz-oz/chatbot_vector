@@ -82,6 +82,7 @@ def api_status(request):
     from django.conf import settings
     return JsonResponse({
         "status": "ok",
-        "model":  settings.CLAUDE_MODEL,
+        "model":  settings.OLLAMA_MODEL,
+        "ollama_url": settings.OLLAMA_URL,
         "knowledge_entries": KnowledgeEntry.objects.count(),
     })

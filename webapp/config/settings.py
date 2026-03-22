@@ -16,8 +16,11 @@ DEBUG = config("DEBUG", default=False, cast=bool)
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="*").split(",")
 
 INSTALLED_APPS = [
+    "django.contrib.admin",
+    "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
+    "django.contrib.messages",
     "django.contrib.staticfiles",
     "chat",
     "scraper",
@@ -29,6 +32,8 @@ MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
@@ -43,6 +48,8 @@ TEMPLATES = [
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
             ],
         },
     },
@@ -87,10 +94,12 @@ USE_TZ = True
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Claude API
-ANTHROPIC_API_KEY   = config("ANTHROPIC_API_KEY", default="")
-CLAUDE_MODEL        = config("CLAUDE_MODEL", default="claude-haiku-4-5-20251001")
-CLAUDE_MAX_TOKENS   = config("CLAUDE_MAX_TOKENS", default=512, cast=int)
+# Ollama (local LLM)
+OLLAMA_URL   = config("OLLAMA_URL",   default="http://ollama:11434")
+OLLAMA_MODEL = config("OLLAMA_MODEL", default="llama3.2:3b")
+
+# Embedding model (nomic-embed-text via Ollama — 768 dimensions)
+EMBEDDING_MODEL = config("EMBEDDING_MODEL", default="nomic-embed-text")
 
 # RAG
 RAG_MAX_ENTRIES = config("RAG_MAX_ENTRIES", default=5, cast=int)
