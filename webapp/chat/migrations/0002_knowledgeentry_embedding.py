@@ -11,6 +11,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RunSQL("CREATE EXTENSION IF NOT EXISTS vector;", migrations.RunSQL.noop),
         migrations.AddField(
             model_name='knowledgeentry',
             name='embedding',
