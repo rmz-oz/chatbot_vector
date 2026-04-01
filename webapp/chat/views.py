@@ -1,9 +1,9 @@
 import json
 import time
 
-from django.http import JsonResponse
+from django.http import JsonResponse, StreamingHttpResponse
 from django.shortcuts import render
-from django.views.decorators.csrf import ensure_csrf_cookie
+from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.views.decorators.http import require_POST
 
 from chat.models import ChatSession, ChatMessage
@@ -68,6 +68,47 @@ def send_message(request):
     )
 
     return JsonResponse({"answer": answer, "response_time_ms": elapsed_ms})
+
+
+@csrf_exempt
+@require_POST
+def stream_message(request):
+    try:
+        data     = json.loads(request.body)
+        question = data.get("question", "").strip()
+    except (json.JSONDecodeError, AttributeError):
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    if not question:
+        return JsonResponse({"error": "Empty question"}, status=400)
+    if len(question) > 1000:
+        return JsonResponse({"error": "Message too long"}, status=400)
+
+    session = _get_or_create_session(request)
+    ChatMessage.objects.create(session=session, role="user", content=question)
+
+    all_msgs = list(session.messages.order_by("timestamp"))
+    history = [{"role": m.role, "content": m.content} for m in all_msgs[:-1]]
+
+    def event_stream():
+        full_answer = []
+        start = time.time()
+        for token in llm.chat_stream(question, history):
+            full_answer.append(token)
+            yield f"data: {json.dumps({'token': token})}\n\n"
+
+        answer = "".join(full_answer)
+        elapsed_ms = int((time.time() - start) * 1000)
+        ChatMessage.objects.create(
+            session=session, role="assistant",
+            content=answer, response_time_ms=elapsed_ms,
+        )
+        yield f"data: {json.dumps({'done': True, 'response_time_ms': elapsed_ms})}\n\n"
+
+    response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
 
 
 @require_POST

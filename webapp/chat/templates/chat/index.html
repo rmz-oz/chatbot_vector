@@ -270,18 +270,52 @@ async function sendMessage() {
   showTyping();
 
   try {
-    const res = await fetch('/api/chat/', {
+    const res = await fetch('/api/stream/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrf() },
       body: JSON.stringify({ question }),
     });
-    const data = await res.json();
+
     removeTyping();
 
-    if (data.error) {
-      addMessage('assistant', '⚠️ ' + data.error);
-    } else {
-      addMessage('assistant', data.answer, data.response_time_ms + 'ms');
+    // Create assistant bubble for streaming
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'message assistant';
+    const metaDiv = document.createElement('div');
+    metaDiv.className = 'meta';
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    msgDiv.innerHTML = '<div class="avatar">A</div>';
+    const inner = document.createElement('div');
+    inner.appendChild(bubble);
+    inner.appendChild(metaDiv);
+    msgDiv.appendChild(inner);
+    chatContainer.appendChild(msgDiv);
+    scrollToBottom();
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const payload = JSON.parse(line.slice(6));
+          if (payload.token) {
+            bubble.textContent += payload.token;
+            scrollToBottom();
+          }
+          if (payload.done) {
+            metaDiv.textContent = payload.response_time_ms + 'ms';
+          }
+        } catch {}
+      }
     }
   } catch {
     removeTyping();

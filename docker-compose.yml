@@ -39,7 +39,7 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     ports:
-      - "11434:11434"
+      - "11435:11434"
     networks:
       - chatbot_network
     restart: unless-stopped
@@ -75,7 +75,7 @@ services:
         python manage.py collectstatic --noinput &&
         python manage.py loaddata /app/fixtures/knowledge_fixture.json.gz &&
         (python manage.py generate_embeddings || echo 'Embedding generation skipped') &
-        gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120
+        gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --worker-class gevent --timeout 200
       "
     volumes:
       - static_files:/app/staticfiles
@@ -87,8 +87,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ollama-init:
-        condition: service_completed_successfully
     networks:
       - chatbot_network
     restart: unless-stopped

@@ -9,4 +9,5 @@ python-dotenv>=1.0.0
 playwright>=1.40.0
 pdfplumber>=0.10.0
 gunicorn>=21.2.0
+gevent==25.9.1
 pgvector>=0.3.0
