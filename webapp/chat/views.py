@@ -3,6 +3,7 @@ import logging
 import time
 import uuid
 
+from django.core.cache import cache
 from django.http import JsonResponse, StreamingHttpResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
@@ -12,6 +13,21 @@ from chat.models import ChatSession, ChatMessage
 from chat import llm
 
 _feedback_log = logging.getLogger("chat.feedback")
+
+# Rate limiting: max 10 requests per minute per IP
+_RATE_LIMIT      = 10
+_RATE_WINDOW     = 60   # seconds
+
+
+def _check_rate_limit(request) -> bool:
+    """Return True if request should be blocked (limit exceeded)."""
+    ip  = request.META.get("HTTP_X_FORWARDED_FOR", request.META.get("REMOTE_ADDR", "")).split(",")[0].strip()
+    key = f"rl:{ip}"
+    count = cache.get(key, 0)
+    if count >= _RATE_LIMIT:
+        return True
+    cache.set(key, count + 1, _RATE_WINDOW)
+    return False
 
 
 def _get_or_create_session(request) -> ChatSession:
@@ -41,6 +57,9 @@ def index(request):
 
 @require_POST
 def send_message(request):
+    if _check_rate_limit(request):
+        return JsonResponse({"error": "Çok fazla istek gönderdiniz. Lütfen bir dakika bekleyin."}, status=429)
+
     try:
         data     = json.loads(request.body)
         question = data.get("question", "").strip()
@@ -75,6 +94,9 @@ def send_message(request):
 @csrf_exempt
 @require_POST
 def stream_message(request):
+    if _check_rate_limit(request):
+        return JsonResponse({"error": "Çok fazla istek gönderdiniz. Lütfen bir dakika bekleyin."}, status=429)
+
     try:
         data     = json.loads(request.body)
         question = data.get("question", "").strip()
