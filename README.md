@@ -219,12 +219,12 @@ Creates a new chat session.
 | obs.acibadem.edu.tr (Bologna) | Playwright + BeautifulSoup | ~1,783 |
 | PDF documents | pdfplumber | ~78 |
 | mevzuat.gov.tr | PDF scraper | ~7 |
-| Curated summaries | Manual | 13 |
-| **Total** | | **~2,422** |
+| Curated summaries | Manual | 14 |
+| **Total** | | **~2,423** |
 
 All entries stored with 768-dimensional `nomic-embed-text` embeddings in PostgreSQL (pgvector). The fixture ships with pre-computed embeddings — no re-generation needed on fresh installs.
 
-**Curated summary entries** are hand-written for high-traffic topics where scraping quality is insufficient: programs list, scholarships, international application, contact info, campus transport, student dorms, double major/minor, tuition fees, transfer admission, English prep program, payment methods. These are returned directly (LLM bypass) for matching queries.
+**Curated summary entries** are hand-written for high-traffic topics where scraping quality is insufficient: programs list, scholarships, international application, contact info, campus transport, student dorms, double major/minor, tuition fees, transfer admission, English prep program, payment methods, academic calendar. These are returned directly (LLM bypass) for matching queries.
 
 ---
 
@@ -288,6 +288,7 @@ Sliding 800-char window finds the densest keyword match within long documents. B
 - ✅ **Admin knowledge entry editor** — edit content + auto embedding refresh on save
 - ✅ **Rate limiting** — 10 req/min per IP via Redis; 429 errors shown as chat bubbles
 - ✅ **loaddata skip** — fixture only loaded on fresh DB; `docker restart` preserves live data
+- ✅ **Academic calendar redirect** — date queries directed to official site; no stale date hallucination
 - ✅ **Playwright scraping** — JS-rendered pages (news, announcements)
 - ✅ **PDF scraping** — pdfplumber extracts university documents and regulations
 - ✅ **Bologna/OBS scraping** — full academic program and course catalog
