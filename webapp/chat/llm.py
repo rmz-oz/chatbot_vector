@@ -359,7 +359,7 @@ def chat_stream(question: str, history: list[dict] | None = None):
             import json as _json
             try:
                 chunk = _json.loads(line)
-                token = _fix_vowel_harmony(_NON_LATIN.sub("", chunk.get("message", {}).get("content", "")))
+                token = _NON_LATIN.sub("", chunk.get("message", {}).get("content", ""))
                 if token:
                     yield token
                 if chunk.get("done"):

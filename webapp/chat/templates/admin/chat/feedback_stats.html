@@ -1,0 +1,56 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<h1>Feedback İstatistikleri</h1>
+
+<!-- Summary cards -->
+<div style="display:flex;gap:12px;margin:20px 0;flex-wrap:wrap;">
+  <div style="background:#dcfce7;border:1px solid #86efac;border-radius:8px;padding:16px 24px;min-width:130px;">
+    <div style="font-size:1.6rem;font-weight:700;color:#16a34a;">{{ up }}</div>
+    <div style="font-size:.85rem;color:#15803d;margin-top:2px;">👍 Beğeni</div>
+  </div>
+  <div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:16px 24px;min-width:130px;">
+    <div style="font-size:1.6rem;font-weight:700;color:#dc2626;">{{ down }}</div>
+    <div style="font-size:.85rem;color:#b91c1c;margin-top:2px;">👎 Beğenmeme</div>
+  </div>
+  <div style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:16px 24px;min-width:130px;">
+    <div style="font-size:1.6rem;font-weight:700;color:#64748b;">{{ no_fb }}</div>
+    <div style="font-size:.85rem;color:#475569;margin-top:2px;">— Geri Bildirim Yok</div>
+  </div>
+  <div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:16px 24px;min-width:130px;">
+    <div style="font-size:1.6rem;font-weight:700;color:#2563eb;">{{ total }}</div>
+    <div style="font-size:.85rem;color:#1d4ed8;margin-top:2px;">Toplam Yanıt</div>
+  </div>
+</div>
+
+<!-- Downvoted pairs -->
+<h2 style="margin-top:32px;margin-bottom:12px;font-size:1.1rem;">👎 Beğenilmeyen Soru-Cevap Çiftleri</h2>
+
+{% if pairs %}
+<div style="overflow-x:auto;">
+  <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.1);">
+    <thead>
+      <tr style="background:#1a3a5c;color:#fff;text-align:left;">
+        <th style="padding:10px 14px;width:38%;font-weight:600;font-size:.85rem;">Soru</th>
+        <th style="padding:10px 14px;width:52%;font-weight:600;font-size:.85rem;">Yanıt</th>
+        <th style="padding:10px 14px;width:10%;font-weight:600;font-size:.85rem;">Tarih</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for pair in pairs %}
+      <tr style="border-bottom:1px solid #e2e8f0;{% cycle '' 'background:#f8fafc' %}">
+        <td style="padding:10px 14px;vertical-align:top;font-size:.85rem;color:#374151;">{{ pair.question|truncatechars:200 }}</td>
+        <td style="padding:10px 14px;vertical-align:top;font-size:.85rem;color:#374151;">{{ pair.answer|truncatechars:300 }}</td>
+        <td style="padding:10px 14px;vertical-align:top;font-size:.8rem;color:#6b7280;white-space:nowrap;">{{ pair.timestamp|date:"d.m.Y" }}<br>{{ pair.timestamp|time:"H:i" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p style="color:#6b7280;padding:20px;background:#f9fafb;border-radius:8px;">Henüz beğenilmeyen yanıt yok.</p>
+{% endif %}
+
+<p style="margin-top:16px;">
+  <a href="../" style="color:#2d6a9f;">&larr; Mesaj Listesine Dön</a>
+</p>
+{% endblock %}
