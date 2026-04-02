@@ -205,14 +205,23 @@ _PROGRAMS_LIST_RE = re.compile(
     r"(program|bolum).*(hangi|liste|neler|var|sunuyor|mevcut)",
     re.IGNORECASE,
 )
-_PROGRAMS_SUMMARY_URL = "https://www.acibadem.edu.tr/akademik/programlar-ozet"
-_INTL_APPLY_URL       = "https://www.acibadem.edu.tr/uluslararasi-ofis/basvuru-rehberi"
+_PROGRAMS_SUMMARY_URL  = "https://www.acibadem.edu.tr/akademik/programlar-ozet"
+_INTL_APPLY_URL        = "https://www.acibadem.edu.tr/uluslararasi-ofis/basvuru-rehberi"
+_SCHOLARSHIPS_URL      = "https://www.acibadem.edu.tr/aday/ogrenci/egitim/burs/burs-ozet"
 
 _INTL_APPLY_RE = re.compile(
     r"(nasil|nasıl).*(basvur|başvur|kayit|kayıt)|"
     r"(basvur|başvur|kayit|kayıt).*(nasil|nasıl|yapabil|edebil)|"
     r"uluslararasi.*(basvur|başvur|kayit|kayıt)|"
     r"(basvur|başvur).*(uluslararasi|yabanci)",
+    re.IGNORECASE,
+)
+
+_SCHOLARSHIPS_RE = re.compile(
+    r"burs|indirim|yks.*(burs|indirim)|"
+    r"(burs|indirim).*(var|nasil|nasıl|alabil|oran|yuzde|yüzde)|"
+    r"sinav.*(burs|indirim)|sıralama.*(burs|indirim)|"
+    r"(burs|indirim).*(sinav|sıralama)|osym.*(burs|indirim)",
     re.IGNORECASE,
 )
 
@@ -270,6 +279,15 @@ def _inject_summary(question: str, entries: list, limit: int) -> list:
         except KnowledgeEntry.DoesNotExist:
             pass
 
+    if _SCHOLARSHIPS_RE.search(q_norm):
+        try:
+            s = KnowledgeEntry.objects.get(source_url=_SCHOLARSHIPS_URL)
+            if s.pk not in pks:
+                injections.append(s)
+                logger.debug("Injected scholarships summary entry")
+        except KnowledgeEntry.DoesNotExist:
+            pass
+
     if injections:
         entries = injections + list(entries)[: limit - len(injections)]
     return entries
@@ -320,7 +338,7 @@ Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 """
 
 
-_BYPASS_URLS = {_PROGRAMS_SUMMARY_URL, _INTL_APPLY_URL}
+_BYPASS_URLS = {_PROGRAMS_SUMMARY_URL, _INTL_APPLY_URL, _SCHOLARSHIPS_URL}
 
 
 def _direct_response(entries: list) -> str | None:
