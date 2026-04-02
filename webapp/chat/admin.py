@@ -1,4 +1,8 @@
-from django.contrib import admin
+import logging
+
+import requests as _requests
+from django.conf import settings as _settings
+from django.contrib import admin, messages
 from django.db.models import Count, Q
 from django.template.response import TemplateResponse
 from django.urls import path
@@ -6,15 +10,39 @@ from django.utils.html import format_html
 
 from chat.models import KnowledgeEntry, ChatSession, ChatMessage
 
+logger = logging.getLogger(__name__)
+
 
 @admin.register(KnowledgeEntry)
 class KnowledgeEntryAdmin(admin.ModelAdmin):
-    list_display   = ("title", "category", "source_link", "scraped_at", "content_length")
-    list_filter    = ("category",)
-    search_fields  = ("title", "keywords", "content")
-    readonly_fields = ("scraped_at", "source_url")
-    ordering       = ("category", "title")
-    list_per_page  = 50
+    list_display    = ("title", "category", "source_link", "scraped_at", "content_length")
+    list_filter     = ("category",)
+    search_fields   = ("title", "keywords", "content")
+    readonly_fields = ("scraped_at", "embedding_dims")
+    ordering        = ("category", "title")
+    list_per_page   = 50
+    fields          = ("title", "category", "source_url", "keywords", "content", "scraped_at", "embedding_dims")
+
+    def embedding_dims(self, obj):
+        return len(obj.embedding) if obj.embedding else "—"
+    embedding_dims.short_description = "Embedding boyutu"
+
+    def save_model(self, request, obj, form, change):
+        """Re-generate embedding whenever content is edited."""
+        if "content" in form.changed_data:
+            try:
+                resp = _requests.post(
+                    f"{_settings.OLLAMA_URL}/api/embeddings",
+                    json={"model": _settings.EMBEDDING_MODEL, "prompt": obj.content},
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                obj.embedding = resp.json()["embedding"]
+                messages.success(request, "Embedding başarıyla yenilendi.")
+            except Exception as e:
+                logger.error("Admin embedding error: %s", e)
+                messages.warning(request, f"Embedding yenilenemedi: {e}")
+        super().save_model(request, obj, form, change)
 
     def source_link(self, obj):
         if obj.source_url:
