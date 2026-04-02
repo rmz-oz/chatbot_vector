@@ -288,6 +288,8 @@ Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 - Bağlamda cevap yoksa SADECE şunu yaz: "Bu konuda elimde bilgi bulunmuyor, lütfen üniversiteyle iletişime geçin." Başka hiçbir şey ekleme.
 - Bilgi bulunamadığında bağlamda geçen program veya bölüm adlarını ASLA yanıta ekleme. Kullanıcı sormadıysa program adı belirtme.
 - Kısa, net ve bilgilendirici cevap ver. Ancak bağlamda bir liste veya tablo varsa listedeki TÜM maddeleri eksiksiz yaz, kısaltma yapma.
+- Bağlamdaki URL'leri olduğu gibi aktar, kısaltma veya değiştirme yapma. URL'leri tam hâliyle yaz (örneğin https://www.acibadem.edu.tr/...).
+- Kesinlikle var olmayan veya uydurulmuş Türkçe kelimeler kullanma.
 - Bağlamdaki kişi isimlerini, unvanları ve adresleri AYNEN kullan. Hiçbir ismi değiştirme, gizleme veya [Adı] gibi yer tutucu ile değiştirme.
 - Yönetmelik veya kural içeren cevaplarda sonuna ekle: "Kesin bilgi için danışmanınıza başvurun."
 - Bir programa ait kuralı tüm üniversiteye genelleme.
