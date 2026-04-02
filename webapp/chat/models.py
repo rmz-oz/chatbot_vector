@@ -46,11 +46,14 @@ class ChatSession(models.Model):
 class ChatMessage(models.Model):
     ROLE_CHOICES = [("user", "User"), ("assistant", "Assistant")]
 
+    FEEDBACK_CHOICES = [("up", "up"), ("down", "down")]
+
     session          = models.ForeignKey(ChatSession, on_delete=models.CASCADE, related_name="messages")
     role             = models.CharField(max_length=10, choices=ROLE_CHOICES)
     content          = models.TextField()
     timestamp        = models.DateTimeField(default=timezone.now)
     response_time_ms = models.IntegerField(null=True, blank=True)
+    feedback         = models.CharField(max_length=4, choices=FEEDBACK_CHOICES, null=True, blank=True)
 
     class Meta:
         ordering = ["timestamp"]
