@@ -287,7 +287,7 @@ Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 - Yanıtlarını YALNIZCA Türkçe yaz. İngilizce kelime, ifade veya açıklama ekleme. "meaning", "so", "therefore", "thus" gibi İngilizce bağlaç veya kelimeler kullanma.
 - Bağlamda cevap yoksa SADECE şunu yaz: "Bu konuda elimde bilgi bulunmuyor, lütfen üniversiteyle iletişime geçin." Başka hiçbir şey ekleme.
 - Bilgi bulunamadığında bağlamda geçen program veya bölüm adlarını ASLA yanıta ekleme. Kullanıcı sormadıysa program adı belirtme.
-- Kısa, net ve bilgilendirici cevap ver.
+- Kısa, net ve bilgilendirici cevap ver. Ancak bağlamda bir liste veya tablo varsa listedeki TÜM maddeleri eksiksiz yaz, kısaltma yapma.
 - Bağlamdaki kişi isimlerini, unvanları ve adresleri AYNEN kullan. Hiçbir ismi değiştirme, gizleme veya [Adı] gibi yer tutucu ile değiştirme.
 - Yönetmelik veya kural içeren cevaplarda sonuna ekle: "Kesin bilgi için danışmanınıza başvurun."
 - Bir programa ait kuralı tüm üniversiteye genelleme.
@@ -306,7 +306,7 @@ def chat(question: str, history: list[dict] | None = None) -> str:
     entries = retrieve_context(question)
     context_parts = []
     for entry in entries:
-        excerpt = smart_excerpt(entry.content, question)
+        excerpt = entry.content if entry.source_url == _PROGRAMS_SUMMARY_URL else smart_excerpt(entry.content, question)
         url_line = f"\nKaynak: {entry.source_url}" if entry.source_url else ""
         context_parts.append(f"### {entry.title}\n{excerpt}{url_line}")
 
@@ -352,7 +352,7 @@ def chat_stream(question: str, history: list[dict] | None = None):
     entries = retrieve_context(question)
     context_parts = []
     for entry in entries:
-        excerpt = smart_excerpt(entry.content, question)
+        excerpt = entry.content if entry.source_url == _PROGRAMS_SUMMARY_URL else smart_excerpt(entry.content, question)
         url_line = f"\nKaynak: {entry.source_url}" if entry.source_url else ""
         context_parts.append(f"### {entry.title}\n{excerpt}{url_line}")
 
