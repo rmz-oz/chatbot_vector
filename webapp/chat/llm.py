@@ -216,6 +216,7 @@ _FEES_URL              = "https://www.acibadem.edu.tr/aday/ogrenci/egitim/ucretl
 _TRANSFER_URL          = "https://www.acibadem.edu.tr/aday/ogrenci/yatay-gecis-ozet"
 _PREP_URL              = "https://www.acibadem.edu.tr/aday/ogrenci/ingilizce-hazirlik-ozet"
 _PAYMENT_URL           = "https://www.acibadem.edu.tr/ogrenci/odeme-yontemleri-ozet"
+_CALENDAR_URL          = "https://www.acibadem.edu.tr/ogrenci/akademik-takvim-ozet"
 
 _INTL_APPLY_RE = re.compile(
     r"(nasil|nasıl).*(basvur|başvur|kayit|kayıt)|"
@@ -275,6 +276,13 @@ _PREP_RE = re.compile(
 _PAYMENT_RE = re.compile(
     r"odeme|ödeme|taksit|havale|banka|nasil.*(ode|öde)|(ode|öde).*nasil|"
     r"kyk.*(odeme|ödeme)|online.*(ode|öde)|ne zaman.*(ode|öde)",
+    re.IGNORECASE,
+)
+
+_CALENDAR_RE = re.compile(
+    r"akademik.?takvim|takvim|kayit.*(tarih|ne zaman|baslıyor|başlıyor)|"
+    r"sinav.*(tarih|ne zaman|donemi|dönemi)|ders.*(baslıyor|başlıyor|ne zaman)|"
+    r"yaz.?okul|tatil.*(tarih|ne zaman)|donem.*(ne zaman|tarih)",
     re.IGNORECASE,
 )
 
@@ -365,6 +373,9 @@ def _inject_summary(question: str, entries: list, limit: int) -> list:
     if _PAYMENT_RE.search(q_norm):
         _maybe_inject(_PAYMENT_URL, "payment summary")
 
+    if _CALENDAR_RE.search(q_norm):
+        _maybe_inject(_CALENDAR_URL, "calendar summary")
+
     if injections:
         injected_pks = {s.pk for s in injections}
         rest = [e for e in entries if e.pk not in injected_pks]
@@ -420,7 +431,7 @@ Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 _BYPASS_URLS = {
     _PROGRAMS_SUMMARY_URL, _INTL_APPLY_URL, _SCHOLARSHIPS_URL,
     _CONTACT_URL, _TRANSPORT_URL, _DORM_URL, _DOUBLE_MAJOR_URL,
-    _FEES_URL, _TRANSFER_URL, _PREP_URL, _PAYMENT_URL,
+    _FEES_URL, _TRANSFER_URL, _PREP_URL, _PAYMENT_URL, _CALENDAR_URL,
 }
 
 
