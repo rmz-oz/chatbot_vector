@@ -212,6 +212,7 @@ _CONTACT_URL           = "https://www.acibadem.edu.tr/universite/iletisim-ozet"
 _TRANSPORT_URL         = "https://www.acibadem.edu.tr/universite/kampus/ulasim-ozet"
 _DORM_URL              = "https://www.acibadem.edu.tr/ogrenci/yurt-ozet"
 _DOUBLE_MAJOR_URL      = "https://www.acibadem.edu.tr/ogrenci/cift-anadal-ozet"
+_FEES_URL              = "https://www.acibadem.edu.tr/aday/ogrenci/egitim/ucretler-ozet"
 
 _INTL_APPLY_RE = re.compile(
     r"(nasil|nasıl).*(basvur|başvur|kayit|kayıt)|"
@@ -253,6 +254,13 @@ _DORM_RE = re.compile(
 _DOUBLE_MAJOR_RE = re.compile(
     r"cift anadal|çift anadal|cap\b|yandal|ikinci bolum|ikinci bölüm|"
     r"iki bolum|iki bölüm|cap basvur|çap basvur",
+    re.IGNORECASE,
+)
+
+_FEES_RE = re.compile(
+    r"ucret|ücret|fiyat|bedel|ne kadar.*öğrenim|öğrenim.*ne kadar|"
+    r"(tıp|tip|eczaci|müh|psiko|hemsir|hemşir|beslenme|fizyoterapi|sağlık yönetimi|bilgisayar|biyomedikal|moleküler).*(ucret|ücret|fiyat|para|öde)|"
+    r"(ucret|ücret|fiyat).*(tıp|tip|fakülte|bölüm|program|lisans)",
     re.IGNORECASE,
 )
 
@@ -324,6 +332,9 @@ def _inject_summary(question: str, entries: list, limit: int) -> list:
     if _DOUBLE_MAJOR_RE.search(q_norm):
         _maybe_inject(_DOUBLE_MAJOR_URL, "double major summary")
 
+    if _FEES_RE.search(q_norm):
+        _maybe_inject(_FEES_URL, "fees summary")
+
     if injections:
         injected_pks = {s.pk for s in injections}
         rest = [e for e in entries if e.pk not in injected_pks]
@@ -378,7 +389,7 @@ Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 
 _BYPASS_URLS = {
     _PROGRAMS_SUMMARY_URL, _INTL_APPLY_URL, _SCHOLARSHIPS_URL,
-    _CONTACT_URL, _TRANSPORT_URL, _DORM_URL, _DOUBLE_MAJOR_URL,
+    _CONTACT_URL, _TRANSPORT_URL, _DORM_URL, _DOUBLE_MAJOR_URL, _FEES_URL,
 }
 
 
