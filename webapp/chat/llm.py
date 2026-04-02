@@ -206,6 +206,15 @@ _PROGRAMS_LIST_RE = re.compile(
     re.IGNORECASE,
 )
 _PROGRAMS_SUMMARY_URL = "https://www.acibadem.edu.tr/akademik/programlar-ozet"
+_INTL_APPLY_URL       = "https://www.acibadem.edu.tr/uluslararasi-ofis/basvuru-rehberi"
+
+_INTL_APPLY_RE = re.compile(
+    r"(nasil|nasıl).*(basvur|başvur|kayit|kayıt)|"
+    r"(basvur|başvur|kayit|kayıt).*(nasil|nasıl|yapabil|edebil)|"
+    r"uluslararasi.*(basvur|başvur|kayit|kayıt)|"
+    r"(basvur|başvur).*(uluslararasi|yabanci)",
+    re.IGNORECASE,
+)
 
 
 def retrieve_context(question: str) -> list:
@@ -224,7 +233,7 @@ def retrieve_context(question: str) -> list:
         entries, best = _do_retrieve(question, words, vector, category, limit, pool)
         if best >= _CATEGORY_SCORE_THRESHOLD:
             logger.debug("Category routing: '%s' → %s (score %.2f)", question[:60], category, best)
-            entries = _inject_programs_summary(question, entries, limit)
+            entries = _inject_summary(question, entries, limit)
             return entries
         logger.debug("Category fallback: '%s' score %.2f < %.2f", question[:60], best, _CATEGORY_SCORE_THRESHOLD)
 
@@ -234,22 +243,35 @@ def retrieve_context(question: str) -> list:
         logger.debug("Low relevance (%.2f) for '%s' — returning no context", best, question[:60])
         return []
 
-    return _inject_programs_summary(question, entries, limit)
+    return _inject_summary(question, entries, limit)
 
 
-def _inject_programs_summary(question: str, entries: list, limit: int) -> list:
-    """If query asks for a program list, prepend the summary entry."""
+def _inject_summary(question: str, entries: list, limit: int) -> list:
+    """Inject curated summary entries for known broad query patterns."""
     q_norm = _normalize_tr(question.lower())
-    if not _PROGRAMS_LIST_RE.search(q_norm):
-        return entries
     pks = {e.pk for e in entries}
-    try:
-        summary = KnowledgeEntry.objects.get(source_url=_PROGRAMS_SUMMARY_URL)
-        if summary.pk not in pks:
-            entries = [summary] + list(entries)[: limit - 1]
-            logger.debug("Injected programs summary entry")
-    except KnowledgeEntry.DoesNotExist:
-        pass
+    injections = []
+
+    if _PROGRAMS_LIST_RE.search(q_norm):
+        try:
+            s = KnowledgeEntry.objects.get(source_url=_PROGRAMS_SUMMARY_URL)
+            if s.pk not in pks:
+                injections.append(s)
+                logger.debug("Injected programs summary entry")
+        except KnowledgeEntry.DoesNotExist:
+            pass
+
+    if _INTL_APPLY_RE.search(q_norm):
+        try:
+            s = KnowledgeEntry.objects.get(source_url=_INTL_APPLY_URL)
+            if s.pk not in pks:
+                injections.append(s)
+                logger.debug("Injected international apply entry")
+        except KnowledgeEntry.DoesNotExist:
+            pass
+
+    if injections:
+        entries = injections + list(entries)[: limit - len(injections)]
     return entries
 
 
@@ -298,9 +320,12 @@ Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 """
 
 
-def _programs_summary_direct(entries: list) -> str | None:
-    """Return programs summary content directly if it's the first entry (bypass LLM)."""
-    if entries and entries[0].source_url == _PROGRAMS_SUMMARY_URL:
+_BYPASS_URLS = {_PROGRAMS_SUMMARY_URL, _INTL_APPLY_URL}
+
+
+def _direct_response(entries: list) -> str | None:
+    """Return curated summary content directly (bypass LLM) for known summary entries."""
+    if entries and entries[0].source_url in _BYPASS_URLS:
         return entries[0].content
     return None
 
@@ -314,13 +339,13 @@ def chat(question: str, history: list[dict] | None = None) -> str:
 
     entries = retrieve_context(question)
 
-    direct = _programs_summary_direct(entries)
+    direct = _direct_response(entries)
     if direct:
         cache.set(cache_key, direct, ANSWER_CACHE_TTL)
         return direct
     context_parts = []
     for entry in entries:
-        excerpt = entry.content if entry.source_url == _PROGRAMS_SUMMARY_URL else smart_excerpt(entry.content, question)
+        excerpt = entry.content if entry.source_url in _BYPASS_URLS else smart_excerpt(entry.content, question)
         url_line = f"\nKaynak: {entry.source_url}" if entry.source_url else ""
         context_parts.append(f"### {entry.title}\n{excerpt}{url_line}")
 
@@ -365,14 +390,14 @@ def chat_stream(question: str, history: list[dict] | None = None):
     """Generator: yields text chunks from Ollama stream for SSE."""
     entries = retrieve_context(question)
 
-    direct = _programs_summary_direct(entries)
+    direct = _direct_response(entries)
     if direct:
         yield direct
         return
 
     context_parts = []
     for entry in entries:
-        excerpt = entry.content if entry.source_url == _PROGRAMS_SUMMARY_URL else smart_excerpt(entry.content, question)
+        excerpt = entry.content if entry.source_url in _BYPASS_URLS else smart_excerpt(entry.content, question)
         url_line = f"\nKaynak: {entry.source_url}" if entry.source_url else ""
         context_parts.append(f"### {entry.title}\n{excerpt}{url_line}")
 
