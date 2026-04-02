@@ -213,6 +213,9 @@ _TRANSPORT_URL         = "https://www.acibadem.edu.tr/universite/kampus/ulasim-o
 _DORM_URL              = "https://www.acibadem.edu.tr/ogrenci/yurt-ozet"
 _DOUBLE_MAJOR_URL      = "https://www.acibadem.edu.tr/ogrenci/cift-anadal-ozet"
 _FEES_URL              = "https://www.acibadem.edu.tr/aday/ogrenci/egitim/ucretler-ozet"
+_TRANSFER_URL          = "https://www.acibadem.edu.tr/aday/ogrenci/yatay-gecis-ozet"
+_PREP_URL              = "https://www.acibadem.edu.tr/aday/ogrenci/ingilizce-hazirlik-ozet"
+_PAYMENT_URL           = "https://www.acibadem.edu.tr/ogrenci/odeme-yontemleri-ozet"
 
 _INTL_APPLY_RE = re.compile(
     r"(nasil|nasıl).*(basvur|başvur|kayit|kayıt)|"
@@ -254,6 +257,24 @@ _DORM_RE = re.compile(
 _DOUBLE_MAJOR_RE = re.compile(
     r"cift anadal|çift anadal|cap\b|yandal|ikinci bolum|ikinci bölüm|"
     r"iki bolum|iki bölüm|cap basvur|çap basvur",
+    re.IGNORECASE,
+)
+
+_TRANSFER_RE = re.compile(
+    r"yatay.?gec|transfer.*(ogrenci|bölüm|program)|bölüm.*(degistir|değiştir)|"
+    r"baska.*(universite|üniversite).*(gec|geç)|kurumlararasi",
+    re.IGNORECASE,
+)
+
+_PREP_RE = re.compile(
+    r"hazirlik|hazırlık|ingilizce.*(sinif|sınıf|program|muafiyet|zorunlu)|"
+    r"appt|muafiyet.*sinav|sinav.*muafiyet|prep.*class|hazirlik.*okumak",
+    re.IGNORECASE,
+)
+
+_PAYMENT_RE = re.compile(
+    r"odeme|ödeme|taksit|havale|banka|nasil.*(ode|öde)|(ode|öde).*nasil|"
+    r"kyk.*(odeme|ödeme)|online.*(ode|öde)|ne zaman.*(ode|öde)",
     re.IGNORECASE,
 )
 
@@ -335,6 +356,15 @@ def _inject_summary(question: str, entries: list, limit: int) -> list:
     if _FEES_RE.search(q_norm):
         _maybe_inject(_FEES_URL, "fees summary")
 
+    if _TRANSFER_RE.search(q_norm):
+        _maybe_inject(_TRANSFER_URL, "transfer summary")
+
+    if _PREP_RE.search(q_norm):
+        _maybe_inject(_PREP_URL, "prep program summary")
+
+    if _PAYMENT_RE.search(q_norm):
+        _maybe_inject(_PAYMENT_URL, "payment summary")
+
     if injections:
         injected_pks = {s.pk for s in injections}
         rest = [e for e in entries if e.pk not in injected_pks]
@@ -389,7 +419,8 @@ Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 
 _BYPASS_URLS = {
     _PROGRAMS_SUMMARY_URL, _INTL_APPLY_URL, _SCHOLARSHIPS_URL,
-    _CONTACT_URL, _TRANSPORT_URL, _DORM_URL, _DOUBLE_MAJOR_URL, _FEES_URL,
+    _CONTACT_URL, _TRANSPORT_URL, _DORM_URL, _DOUBLE_MAJOR_URL,
+    _FEES_URL, _TRANSFER_URL, _PREP_URL, _PAYMENT_URL,
 }
 
 

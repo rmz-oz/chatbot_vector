@@ -219,12 +219,12 @@ Creates a new chat session.
 | obs.acibadem.edu.tr (Bologna) | Playwright + BeautifulSoup | ~1,783 |
 | PDF documents | pdfplumber | ~78 |
 | mevzuat.gov.tr | PDF scraper | ~7 |
-| Curated summaries | Manual | 10 |
-| **Total** | | **~2,418** |
+| Curated summaries | Manual | 13 |
+| **Total** | | **~2,422** |
 
 All entries stored with 768-dimensional `nomic-embed-text` embeddings in PostgreSQL (pgvector). The fixture ships with pre-computed embeddings — no re-generation needed on fresh installs.
 
-**Curated summary entries** are hand-written for high-traffic topics where scraping quality is insufficient: programs list, scholarships, international application, contact info, campus transport, student dorms, double major/minor. These are returned directly (LLM bypass) for matching queries.
+**Curated summary entries** are hand-written for high-traffic topics where scraping quality is insufficient: programs list, scholarships, international application, contact info, campus transport, student dorms, double major/minor, tuition fees, transfer admission, English prep program, payment methods. These are returned directly (LLM bypass) for matching queries.
 
 ---
 
@@ -285,6 +285,9 @@ Sliding 800-char window finds the densest keyword match within long documents. B
 - ✅ **Redis caching** — instant repeat answers, cached embeddings
 - ✅ **Multi-session UI** — sidebar with session history, dark/light mode, mobile responsive
 - ✅ **Upvote/downvote feedback** — stored per message; admin stats page + downvote logging
+- ✅ **Admin knowledge entry editor** — edit content + auto embedding refresh on save
+- ✅ **Rate limiting** — 10 req/min per IP via Redis; 429 errors shown as chat bubbles
+- ✅ **loaddata skip** — fixture only loaded on fresh DB; `docker restart` preserves live data
 - ✅ **Playwright scraping** — JS-rendered pages (news, announcements)
 - ✅ **PDF scraping** — pdfplumber extracts university documents and regulations
 - ✅ **Bologna/OBS scraping** — full academic program and course catalog
@@ -296,7 +299,7 @@ Sliding 800-char window finds the densest keyword match within long documents. B
 ## Future Improvements
 
 **Short-term**
-Admin panel knowledge entry editor (inline embedding refresh on save); rate limiting on `/api/chat/`; question suggestion buttons on chat open; cache invalidation on entry edit
+Question suggestion buttons on chat open; cache invalidation on entry edit; upgrade to `llama3.1:8b`
 
 **Medium-term**
 CI/CD via GitHub Actions; Kubernetes migration; benchmark vs `mistral:7b` / `llama3.1:8b` / `gemma2:9b`; auto language detection; source URL surfacing in responses
