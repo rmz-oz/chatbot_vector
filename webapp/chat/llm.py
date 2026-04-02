@@ -208,6 +208,7 @@ _PROGRAMS_LIST_RE = re.compile(
 _PROGRAMS_SUMMARY_URL  = "https://www.acibadem.edu.tr/akademik/programlar-ozet"
 _INTL_APPLY_URL        = "https://www.acibadem.edu.tr/uluslararasi-ofis/basvuru-rehberi"
 _SCHOLARSHIPS_URL      = "https://www.acibadem.edu.tr/aday/ogrenci/egitim/burs/burs-ozet"
+_CONTACT_URL           = "https://www.acibadem.edu.tr/universite/iletisim-ozet"
 
 _INTL_APPLY_RE = re.compile(
     r"(nasil|nasıl).*(basvur|başvur|kayit|kayıt)|"
@@ -222,6 +223,14 @@ _SCHOLARSHIPS_RE = re.compile(
     r"(burs|indirim).*(var|nasil|nasıl|alabil|oran|yuzde|yüzde)|"
     r"sinav.*(burs|indirim)|sıralama.*(burs|indirim)|"
     r"(burs|indirim).*(sinav|sıralama)|osym.*(burs|indirim)",
+    re.IGNORECASE,
+)
+
+_CONTACT_RE = re.compile(
+    r"iletisim|iletişim|telefon|eposta|e-posta|adres|ulasim|ulaşım|"
+    r"(nasil|nasıl).*(ulasil|ulaşıl|iletisim|iletişim)|"
+    r"(numara|mail|saat).*(universite|üniversite)|"
+    r"(universite|üniversite).*(numara|mail|saat|adres|iletisim)",
     re.IGNORECASE,
 )
 
@@ -256,40 +265,38 @@ def retrieve_context(question: str) -> list:
 
 
 def _inject_summary(question: str, entries: list, limit: int) -> list:
-    """Inject curated summary entries for known broad query patterns."""
+    """Inject curated summary entries for known broad query patterns.
+
+    The summary entry is always moved to position 0 — even if it was already
+    retrieved by the vector search at a lower rank.
+    """
     q_norm = _normalize_tr(question.lower())
-    pks = {e.pk for e in entries}
     injections = []
 
-    if _PROGRAMS_LIST_RE.search(q_norm):
+    def _maybe_inject(url: str, label: str) -> None:
         try:
-            s = KnowledgeEntry.objects.get(source_url=_PROGRAMS_SUMMARY_URL)
-            if s.pk not in pks:
-                injections.append(s)
-                logger.debug("Injected programs summary entry")
+            s = KnowledgeEntry.objects.get(source_url=url)
+            injections.append(s)
+            logger.debug("Injected %s entry", label)
         except KnowledgeEntry.DoesNotExist:
             pass
+
+    if _PROGRAMS_LIST_RE.search(q_norm):
+        _maybe_inject(_PROGRAMS_SUMMARY_URL, "programs summary")
 
     if _INTL_APPLY_RE.search(q_norm):
-        try:
-            s = KnowledgeEntry.objects.get(source_url=_INTL_APPLY_URL)
-            if s.pk not in pks:
-                injections.append(s)
-                logger.debug("Injected international apply entry")
-        except KnowledgeEntry.DoesNotExist:
-            pass
+        _maybe_inject(_INTL_APPLY_URL, "international apply")
 
     if _SCHOLARSHIPS_RE.search(q_norm):
-        try:
-            s = KnowledgeEntry.objects.get(source_url=_SCHOLARSHIPS_URL)
-            if s.pk not in pks:
-                injections.append(s)
-                logger.debug("Injected scholarships summary entry")
-        except KnowledgeEntry.DoesNotExist:
-            pass
+        _maybe_inject(_SCHOLARSHIPS_URL, "scholarships summary")
+
+    if _CONTACT_RE.search(q_norm):
+        _maybe_inject(_CONTACT_URL, "contact summary")
 
     if injections:
-        entries = injections + list(entries)[: limit - len(injections)]
+        injected_pks = {s.pk for s in injections}
+        rest = [e for e in entries if e.pk not in injected_pks]
+        entries = injections + rest[: limit - len(injections)]
     return entries
 
 
@@ -338,7 +345,7 @@ Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 """
 
 
-_BYPASS_URLS = {_PROGRAMS_SUMMARY_URL, _INTL_APPLY_URL, _SCHOLARSHIPS_URL}
+_BYPASS_URLS = {_PROGRAMS_SUMMARY_URL, _INTL_APPLY_URL, _SCHOLARSHIPS_URL, _CONTACT_URL}
 
 
 def _direct_response(entries: list) -> str | None:
