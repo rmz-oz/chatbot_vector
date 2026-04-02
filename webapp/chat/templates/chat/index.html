@@ -486,7 +486,7 @@ header {
       <div class="message {{ msg.role }}"{% if msg.role == 'assistant' %} data-message-id="{{ msg.id }}"{% endif %}>
         <div class="avatar">{{ msg.role|slice:":1"|upper }}</div>
         <div class="msg-body">
-          <div class="bubble">{{ msg.content }}</div>
+          <div class="bubble js-linkify">{{ msg.content }}</div>
           <div class="msg-meta">
             <span>{{ msg.timestamp|time:"H:i" }}</span>
             {% if msg.response_time_ms %}<span>{{ msg.response_time_ms }}ms</span>{% endif %}
@@ -678,6 +678,13 @@ function escHtml(t) {
                   .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
 
+function linkify(t) {
+  return escHtml(t).replace(
+    /(https?:\/\/[^\s<>"']+)/g,
+    '<a href="$1" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline;word-break:break-all;">$1</a>'
+  );
+}
+
 function csrf() {
   const m = document.cookie.match(/csrftoken=([^;]+)/);
   return m ? m[1] : '';
@@ -689,7 +696,7 @@ function makeMsg(role, content, meta) {
   d.innerHTML = `
     <div class="avatar">${role === 'user' ? 'U' : 'A'}</div>
     <div class="msg-body">
-      <div class="bubble">${escHtml(content)}</div>
+      <div class="bubble">${role === 'assistant' ? linkify(content) : escHtml(content)}</div>
       <div class="msg-meta">
         <span>${nowHM()}</span>
         ${meta ? `<span>${escHtml(meta)}</span>` : ''}
@@ -753,7 +760,8 @@ async function sendMessage() {
           const p = JSON.parse(line.slice(6));
           if (p.token)  { bubble.textContent += p.token; scrollBot(); }
           if (p.done) {
-            if (p.corrected_text) bubble.textContent = p.corrected_text;
+            if (p.corrected_text) bubble.innerHTML = linkify(p.corrected_text);
+            else bubble.innerHTML = linkify(bubble.textContent);
 
             // ms badge
             const ms = document.createElement('span');
@@ -797,6 +805,11 @@ async function clearHistory() {
 
 // ── Init ──────────────────────────────────────────────────────────────
 loadSessions();
+
+// Linkify bubbles loaded from DB (assistant messages only)
+document.querySelectorAll('.message.assistant .bubble.js-linkify').forEach(el => {
+  el.innerHTML = linkify(el.textContent);
+});
 </script>
 </body>
 </html>
