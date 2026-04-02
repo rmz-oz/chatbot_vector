@@ -39,13 +39,14 @@ A sovereign, on-premises AI chatbot that answers natural-language questions abou
 ```
 
 **RAG Data Flow:**
-1. User question → 768-dim vector embedding via `nomic-embed-text`
+1. User question (+ last user turn for follow-up context) → 768-dim vector embedding via `nomic-embed-text`
 2. **Category routing** — question classified into a topic (fees, programs, admission, etc.); vector search scoped to that category
 3. **Hybrid search** — pgvector cosine similarity + PostgreSQL keyword scoring, `0.5 × vector + 0.5 × keyword`
 4. **Relevance threshold** — results below minimum confidence score filtered out to prevent hallucination
-5. Top 5 entries selected; `smart_excerpt` finds the most relevant 800-char window per document
-6. Context + question sent to `llama3.2:3b` via Ollama HTTP API (fully local)
-7. Answer streamed token-by-token via SSE; cached in Redis (1-hour TTL)
+5. **Injection / Bypass** — curated summary entries prepended or returned directly for known query patterns (programs list, scholarships, contact, transport, dorms, double-major, international apply)
+6. Top 5 entries selected; `smart_excerpt` finds the most relevant 800-char window per document
+7. Context + question sent to `llama3.2:3b` via Ollama HTTP API (fully local)
+8. Answer streamed token-by-token via SSE; cached in Redis (1-hour TTL)
 
 ---
 
@@ -187,9 +188,25 @@ data: {"token": " Mühendisliği"}
 data: {"done": true, "response_time_ms": 10061}
 ```
 
+### `POST /api/feedback/<message_id>/`
+```json
+{ "feedback": "up" }   // or "down"
+```
+
+### `GET /api/sessions/`
+Returns list of active chat sessions for the current user.
+
+### `POST /api/sessions/new/`
+Creates a new chat session.
+
+### `POST /api/sessions/switch/`
+```json
+{ "session_id": "abc123" }
+```
+
 ### `GET /api/status/`
 ```json
-{ "status": "ok", "model": "llama3.2:3b", "knowledge_entries": 2411 }
+{ "status": "ok", "model": "llama3.2:3b", "knowledge_entries": 2418 }
 ```
 
 ---
@@ -202,10 +219,12 @@ data: {"done": true, "response_time_ms": 10061}
 | obs.acibadem.edu.tr (Bologna) | Playwright + BeautifulSoup | ~1,783 |
 | PDF documents | pdfplumber | ~78 |
 | mevzuat.gov.tr | PDF scraper | ~7 |
-| Manual additions | Django shell | ~1 |
-| **Total** | | **~2,411** |
+| Curated summaries | Manual | 10 |
+| **Total** | | **~2,418** |
 
 All entries stored with 768-dimensional `nomic-embed-text` embeddings in PostgreSQL (pgvector). The fixture ships with pre-computed embeddings — no re-generation needed on fresh installs.
+
+**Curated summary entries** are hand-written for high-traffic topics where scraping quality is insufficient: programs list, scholarships, international application, contact info, campus transport, student dorms, double major/minor. These are returned directly (LLM bypass) for matching queries.
 
 ---
 
@@ -232,12 +251,18 @@ score = 0.5 × vector_score + 0.5 × keyword_score
 Vector candidates: pgvector cosine similarity (top 50 pool)
 Keyword candidates: PostgreSQL `ILIKE` filter (replaces full Python table scan)
 
+**Multi-turn Context**
+The last user message is prepended to the current question before embedding, so follow-up queries like "peki ücreti ne kadar?" retrieve the right entry without repeating context.
+
+**Curated Injection / LLM Bypass**
+For known broad queries (programs list, scholarships, international application, contact, transport, dorms, double-major), curated summary entries are injected at the top of results. If the top result is a bypass URL, the LLM is skipped entirely and the curated content is returned directly — eliminating hallucination for these high-traffic topics.
+
 **Post-processing**
-- Non-Latin character filter (strips CJK/Arabic hallucinations)
+- Non-Latin character filter (strips CJK/Arabic hallucinations, preserves ₺ and €)
 - Turkish vowel harmony correction (e.g. `BULUT'dür` → `BULUT'dur`)
 
 **Smart Excerpt**
-Sliding 800-char window finds the densest keyword match within long documents.
+Sliding 800-char window finds the densest keyword match within long documents. Bypass entries skip this and pass full content to the LLM.
 
 **Caching**
 - Embeddings: Redis 24h TTL
@@ -249,12 +274,17 @@ Sliding 800-char window finds the densest keyword match within long documents.
 
 - ✅ **Streaming SSE** — token-by-token responses, no waiting
 - ✅ **Structured Hybrid RAG** — category routing + vector + keyword
+- ✅ **Multi-turn context** — last user message enriches retrieval for follow-up questions
+- ✅ **Curated injection & LLM bypass** — 7 high-traffic topics returned without LLM involvement
+- ✅ **Navigation junk cleanup** — 506 scraped entries cleaned of nav blocks, embeddings re-generated
 - ✅ **PostgreSQL keyword search** — DB-side filtering (no full table scan)
 - ✅ **Relevance threshold** — prevents hallucination from low-confidence results
 - ✅ **Turkish character normalization** — "bolum baskani" matches "bölüm başkanı"
-- ✅ **Post-processing** — non-Latin character filter + vowel harmony correction
+- ✅ **Post-processing** — non-Latin character filter (preserves ₺/€) + vowel harmony correction
 - ✅ **pgvector** — 768-dim embeddings in PostgreSQL, no separate vector DB
 - ✅ **Redis caching** — instant repeat answers, cached embeddings
+- ✅ **Multi-session UI** — sidebar with session history, dark/light mode, mobile responsive
+- ✅ **Upvote/downvote feedback** — stored per message; admin stats page + downvote logging
 - ✅ **Playwright scraping** — JS-rendered pages (news, announcements)
 - ✅ **PDF scraping** — pdfplumber extracts university documents and regulations
 - ✅ **Bologna/OBS scraping** — full academic program and course catalog
@@ -266,7 +296,7 @@ Sliding 800-char window finds the densest keyword match within long documents.
 ## Future Improvements
 
 **Short-term**
-UI redesign (timestamps, typing indicators, mobile responsiveness); dark/light mode toggle; upvote/downvote feedback; upgrade to `llama3.1:8b`
+Admin panel knowledge entry editor (inline embedding refresh on save); rate limiting on `/api/chat/`; question suggestion buttons on chat open; cache invalidation on entry edit
 
 **Medium-term**
 CI/CD via GitHub Actions; Kubernetes migration; benchmark vs `mistral:7b` / `llama3.1:8b` / `gemma2:9b`; auto language detection; source URL surfacing in responses
