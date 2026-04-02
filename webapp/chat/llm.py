@@ -199,6 +199,14 @@ _CATEGORY_SCORE_THRESHOLD = 0.45
 # If global best score is below this, return nothing to avoid hallucination.
 _MIN_RELEVANCE_SCORE = 0.40
 
+# Detects "list all programs" intent — inject the summary entry
+_PROGRAMS_LIST_RE = re.compile(
+    r"(hangi|tüm|butun|liste|neler|ne var|ne tur).*(program|bolum|fakulte)|"
+    r"(program|bolum).*(hangi|liste|neler|var|sunuyor|mevcut)",
+    re.IGNORECASE,
+)
+_PROGRAMS_SUMMARY_URL = "https://www.acibadem.edu.tr/akademik/programlar-ozet"
+
 
 def retrieve_context(question: str) -> list:
     """
@@ -216,6 +224,7 @@ def retrieve_context(question: str) -> list:
         entries, best = _do_retrieve(question, words, vector, category, limit, pool)
         if best >= _CATEGORY_SCORE_THRESHOLD:
             logger.debug("Category routing: '%s' → %s (score %.2f)", question[:60], category, best)
+            entries = _inject_programs_summary(question, entries, limit)
             return entries
         logger.debug("Category fallback: '%s' score %.2f < %.2f", question[:60], best, _CATEGORY_SCORE_THRESHOLD)
 
@@ -225,6 +234,22 @@ def retrieve_context(question: str) -> list:
         logger.debug("Low relevance (%.2f) for '%s' — returning no context", best, question[:60])
         return []
 
+    return _inject_programs_summary(question, entries, limit)
+
+
+def _inject_programs_summary(question: str, entries: list, limit: int) -> list:
+    """If query asks for a program list, prepend the summary entry."""
+    q_norm = _normalize_tr(question.lower())
+    if not _PROGRAMS_LIST_RE.search(q_norm):
+        return entries
+    pks = {e.pk for e in entries}
+    try:
+        summary = KnowledgeEntry.objects.get(source_url=_PROGRAMS_SUMMARY_URL)
+        if summary.pk not in pks:
+            entries = [summary] + list(entries)[: limit - 1]
+            logger.debug("Injected programs summary entry")
+    except KnowledgeEntry.DoesNotExist:
+        pass
     return entries
 
 
