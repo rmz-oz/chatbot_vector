@@ -209,6 +209,9 @@ _PROGRAMS_SUMMARY_URL  = "https://www.acibadem.edu.tr/akademik/programlar-ozet"
 _INTL_APPLY_URL        = "https://www.acibadem.edu.tr/uluslararasi-ofis/basvuru-rehberi"
 _SCHOLARSHIPS_URL      = "https://www.acibadem.edu.tr/aday/ogrenci/egitim/burs/burs-ozet"
 _CONTACT_URL           = "https://www.acibadem.edu.tr/universite/iletisim-ozet"
+_TRANSPORT_URL         = "https://www.acibadem.edu.tr/universite/kampus/ulasim-ozet"
+_DORM_URL              = "https://www.acibadem.edu.tr/ogrenci/yurt-ozet"
+_DOUBLE_MAJOR_URL      = "https://www.acibadem.edu.tr/ogrenci/cift-anadal-ozet"
 
 _INTL_APPLY_RE = re.compile(
     r"(nasil|nasıl).*(basvur|başvur|kayit|kayıt)|"
@@ -227,10 +230,29 @@ _SCHOLARSHIPS_RE = re.compile(
 )
 
 _CONTACT_RE = re.compile(
-    r"iletisim|iletişim|telefon|eposta|e-posta|adres|ulasim|ulaşım|"
+    r"iletisim|iletişim|telefon|eposta|e-posta|"
     r"(nasil|nasıl).*(ulasil|ulaşıl|iletisim|iletişim)|"
     r"(numara|mail|saat).*(universite|üniversite)|"
     r"(universite|üniversite).*(numara|mail|saat|adres|iletisim)",
+    re.IGNORECASE,
+)
+
+_TRANSPORT_RE = re.compile(
+    r"ulasim|ulaşım|kampus.*gid|gid.*kampus|nasil.*gid|"
+    r"metro|otobüs|otobus|servis|kozyatagi|kozyatağı|yol tarif|"
+    r"nereden.*bin|hangi.*metro|hangi.*otobüs",
+    re.IGNORECASE,
+)
+
+_DORM_RE = re.compile(
+    r"yurt|konaklam|barinma|barınma|oda.*kira|kira.*oda|"
+    r"ogrenci.*yurd|yurd.*ogrenci|kalacak|nerede.*kal",
+    re.IGNORECASE,
+)
+
+_DOUBLE_MAJOR_RE = re.compile(
+    r"cift anadal|çift anadal|cap\b|yandal|ikinci bolum|ikinci bölüm|"
+    r"iki bolum|iki bölüm|cap basvur|çap basvur",
     re.IGNORECASE,
 )
 
@@ -293,6 +315,15 @@ def _inject_summary(question: str, entries: list, limit: int) -> list:
     if _CONTACT_RE.search(q_norm):
         _maybe_inject(_CONTACT_URL, "contact summary")
 
+    if _TRANSPORT_RE.search(q_norm):
+        _maybe_inject(_TRANSPORT_URL, "transport summary")
+
+    if _DORM_RE.search(q_norm):
+        _maybe_inject(_DORM_URL, "dorm summary")
+
+    if _DOUBLE_MAJOR_RE.search(q_norm):
+        _maybe_inject(_DOUBLE_MAJOR_URL, "double major summary")
+
     if injections:
         injected_pks = {s.pk for s in injections}
         rest = [e for e in entries if e.pk not in injected_pks]
@@ -345,7 +376,10 @@ Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 """
 
 
-_BYPASS_URLS = {_PROGRAMS_SUMMARY_URL, _INTL_APPLY_URL, _SCHOLARSHIPS_URL, _CONTACT_URL}
+_BYPASS_URLS = {
+    _PROGRAMS_SUMMARY_URL, _INTL_APPLY_URL, _SCHOLARSHIPS_URL,
+    _CONTACT_URL, _TRANSPORT_URL, _DORM_URL, _DOUBLE_MAJOR_URL,
+}
 
 
 def _direct_response(entries: list) -> str | None:
@@ -355,6 +389,24 @@ def _direct_response(entries: list) -> str | None:
     return None
 
 
+def _retrieval_query(question: str, history: list[dict] | None) -> str:
+    """Build an enriched query for RAG retrieval using recent conversation context.
+
+    Follow-up questions like "peki ücreti ne kadar?" are ambiguous without
+    the previous turn. Prepend the last user message so the embedding captures
+    the full intent.
+    """
+    if not history:
+        return question
+    last_user = next(
+        (m["content"] for m in reversed(history) if m.get("role") == "user"),
+        None,
+    )
+    if not last_user or last_user == question:
+        return question
+    return f"{last_user[:200]} {question}"
+
+
 def chat(question: str, history: list[dict] | None = None) -> str:
     """Send question + vector-retrieved context to Ollama and return the answer."""
     cache_key = "ans:" + hashlib.md5(question.encode()).hexdigest()
@@ -362,7 +414,7 @@ def chat(question: str, history: list[dict] | None = None) -> str:
     if cached:
         return cached
 
-    entries = retrieve_context(question)
+    entries = retrieve_context(_retrieval_query(question, history))
 
     direct = _direct_response(entries)
     if direct:
@@ -413,7 +465,7 @@ def chat(question: str, history: list[dict] | None = None) -> str:
 
 def chat_stream(question: str, history: list[dict] | None = None):
     """Generator: yields text chunks from Ollama stream for SSE."""
-    entries = retrieve_context(question)
+    entries = retrieve_context(_retrieval_query(question, history))
 
     direct = _direct_response(entries)
     if direct:
