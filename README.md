@@ -2,48 +2,50 @@
 
 **CSE 322 – Cloud Computing | Spring 2026**
 
-An AI-powered chatbot web application that answers questions about Acıbadem University using data collected from the university's websites. Built with Django, PostgreSQL, Redis, and a local LLM (Llama 3.2) served via Ollama — fully containerized with Docker Compose.
+A sovereign, on-premises AI chatbot that answers natural-language questions about Acıbadem Mehmet Ali Aydınlar University. Zero external API calls — all inference runs locally via Ollama. Built with Django, PostgreSQL/pgvector, Redis, and Docker Compose.
+
+**Group:** Cold Start &nbsp;|&nbsp; **Repo:** [github.com/rmz-oz/chatbot_vector](https://github.com/rmz-oz/chatbot_vector)
 
 ---
 
-## Team Members
+## Team
 
-| Name | Student ID | Role |
-|------|-----------|------|
-| (Member 1) | | Django / Backend |
-| (Member 2) | | Web Scraping / Data |
-| (Member 3) | | Docker / DevOps |
-| (Member 4) | | AI Integration / Prompting |
+| Member | Role | Contributions |
+|--------|------|---------------|
+| **Ramiz** | Backend | Django skeleton, DB models (`KnowledgeEntry`, `ChatSession`, `ChatMessage`), REST API endpoints, fixture-based data loading pipeline, `wait_for_db.py` service-readiness probe |
+| **Onur** | Web Scraping & Data | Five scraping pipelines (BeautifulSoup, Playwright, pdfplumber): 542 website pages, 78 PDFs, 1,783 Bologna/OBS catalogue pages, mevzuat.gov.tr regulatory data → 2,410+ total entries |
+| **Demir** | Docker & DevOps | `docker-compose.yml` authoring, pgvector/pg15 selection, `ollama-init` optimization, background embedding generation for fast Gunicorn startup |
+| **Deha** | AI Integration & RAG | Ollama HTTP integration, Hybrid RAG engine (vector + keyword), system prompts, regulation-aware logic, `smart_excerpt` sliding-window algorithm |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                       docker-compose.yml                         │
-│                                                                  │
-│  ┌──────────┐    ┌────────────────────┐    ┌──────────────────┐  │
-│  │ web      │    │ ollama             │    │ db (PostgreSQL)  │  │
-│  │ Django   │───▶│ llama3.2:3b (chat) │    │ + pgvector       │  │
-│  │ :8002    │    │ nomic-embed-text   │    │ :5432            │  │
-│  └────┬─────┘    │ (embeddings)       │    └──────────────────┘  │
-│       │          │ :11434             │                           │
-│       │          └────────────────────┘    ┌──────────────────┐  │
-│       │                                    │ redis            │  │
-│       └────────────────────────────────────│ cache :6379      │  │
-│                                            └──────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        docker-compose.yml                         │
+│                                                                   │
+│  ┌──────────┐    ┌─────────────────────┐    ┌─────────────────┐  │
+│  │ web      │    │ ollama              │    │ db (PostgreSQL) │  │
+│  │ Django   │───▶│ llama3.2:3b (chat)  │    │ + pgvector      │  │
+│  │ :8002    │    │ nomic-embed-text    │    │ :5432           │  │
+│  └────┬─────┘    │ (embeddings)        │    └─────────────────┘  │
+│       │          │ :11434              │                          │
+│       │          └─────────────────────┘    ┌─────────────────┐  │
+│       │                                     │ redis           │  │
+│       └─────────────────────────────────────│ cache :6379     │  │
+│                                             └─────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-**Data Flow:**
-1. User types a question in the chat interface
-2. Django generates a vector embedding of the question via Ollama (`nomic-embed-text`)
-3. **Hybrid search:** pgvector cosine similarity + keyword scoring, results combined and reranked
-4. Top 5 most relevant entries are selected as context (RAG)
-5. Context + question sent to local Ollama (`llama3.2:3b`) via streaming HTTP
-6. LLM streams a natural-language answer token by token (SSE)
-7. Answer cached in Redis (1-hour TTL) and returned to user
+**RAG Data Flow:**
+1. User question → 768-dim vector embedding via `nomic-embed-text`
+2. **Category routing** — question classified into a topic (fees, programs, admission, etc.); vector search scoped to that category
+3. **Hybrid search** — pgvector cosine similarity + PostgreSQL keyword scoring, `0.5 × vector + 0.5 × keyword`
+4. **Relevance threshold** — results below minimum confidence score filtered out to prevent hallucination
+5. Top 5 entries selected; `smart_excerpt` finds the most relevant 800-char window per document
+6. Context + question sent to `llama3.2:3b` via Ollama HTTP API (fully local)
+7. Answer streamed token-by-token via SSE; cached in Redis (1-hour TTL)
 
 ---
 
@@ -51,35 +53,33 @@ An AI-powered chatbot web application that answers questions about Acıbadem Uni
 
 ### Prerequisites
 - Docker & Docker Compose
-- ~6 GB free disk space (Llama 3.2 3B model ~2 GB + nomic-embed-text ~700 MB + PostgreSQL data)
+- ~6 GB free disk space (llama3.2:3b ~2 GB + nomic-embed-text ~700 MB + PostgreSQL data)
 
-### 1. Clone the repository
+### 1. Clone
 ```bash
-git clone <repository-url>
+git clone https://github.com/rmz-oz/chatbot_vector.git
 cd chatbot_vector
 ```
 
-### 2. Configure environment
+### 2. Configure
 ```bash
 cp .env.example .env
-# Edit .env if needed (defaults work out of the box)
+# Defaults work out of the box
 ```
 
-### 3. Start all services
+### 3. Start
 ```bash
 docker compose up --build
 ```
 
-> **First run:** The `ollama-init` container automatically downloads both AI models:
-> - `llama3.2:3b` (~2 GB) — the chat model
-> - `nomic-embed-text` (~700 MB) — the embedding model for vector search
->
-> This takes 5–15 minutes depending on your connection. The knowledge base fixture (`knowledge_fixture.json.gz`) ships with pre-generated embeddings, so **no re-embedding is needed on subsequent startups**.
+> **First run:** `ollama-init` automatically downloads both models (~2.7 GB total). Takes 5–15 minutes depending on connection. The knowledge base fixture ships with pre-generated embeddings — **no re-embedding needed** on subsequent startups.
 
-### 4. Open the chatbot
-- **Chat Interface:** http://localhost:8002
-- **Admin Panel:** http://localhost:8002/admin
-- **API Status:** http://localhost:8002/api/status/
+### 4. Open
+| URL | Description |
+|-----|-------------|
+| http://localhost:8002 | Chat interface |
+| http://localhost:8002/admin | Django admin |
+| http://localhost:8002/api/status/ | System status |
 
 ### 5. Create admin user (first time)
 ```bash
@@ -90,61 +90,42 @@ docker compose exec web python manage.py createsuperuser
 
 ## Performance & GPU Acceleration
 
-Response speed depends heavily on your hardware. The default Docker setup uses **CPU only**, which is slow. For a good experience, use native Ollama with GPU acceleration.
-
 | Hardware | Setup | Speed | Response time |
 |---|---|---|---|
-| Apple Silicon (M1/M2/M3) | Native Ollama (Metal) | ~8–15 tok/s | **~10–20sn** |
-| NVIDIA GPU | Docker + CUDA | ~30–60 tok/s | **~3–8sn** |
-| Intel Mac / CPU only | Docker (default) | ~0.5–2 tok/s | **2–5 min** |
+| Apple Silicon (M1/M2/M3) | Native Ollama (Metal GPU) | ~8–15 tok/s | **~10–20s** |
+| NVIDIA GPU | Docker + CUDA | ~30–60 tok/s | **~3–8s** |
+| CPU only | Docker (default) | ~0.5–2 tok/s | **2–5 min** |
 
-### Option A — Apple Silicon (Recommended for Mac)
-
-Install and run Ollama natively so it can access the Metal GPU:
+### Apple Silicon — Native Ollama (Recommended)
 
 ```bash
-# 1. Download Ollama from https://ollama.com and install Ollama.app
-
-# 2. Pull the required models
-ollama pull llama3.2:3b
-ollama pull nomic-embed-text
-
-# 3. Start Ollama natively (run this before docker compose up)
-ollama serve
+# Run Ollama natively to access Metal GPU
+OLLAMA_HOST=0.0.0.0:11436 /Applications/Ollama.app/Contents/Resources/ollama serve &
 ```
 
-Then update your `.env`:
+Update `.env`:
 ```
-OLLAMA_URL=http://host.docker.internal:11434
+OLLAMA_URL=http://host.docker.internal:11436
 ```
 
-And remove the Docker Ollama dependency by editing `docker-compose.yml` — remove the `ollama` and `ollama-init` services, and remove `ollama-init` from the `web` service's `depends_on`.
+Then remove the `ollama` and `ollama-init` services from `docker-compose.yml` (and remove `ollama-init` from `web.depends_on`).
 
-### Option B — NVIDIA GPU (Linux / Windows WSL2)
+### NVIDIA GPU
 
-Add the following to the `ollama` service in `docker-compose.yml`:
-
+Add to the `ollama` service in `docker-compose.yml`:
 ```yaml
-  ollama:
-    image: ollama/ollama:latest
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: all
+          capabilities: [gpu]
 ```
+Requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
 
-Requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) to be installed.
-
-### Option C — CPU only (Default, works everywhere)
-
-No changes needed. Just run:
-```bash
-docker compose up --build
-```
-This works on any machine but responses may take 2–5 minutes. The streaming interface ensures you see text as it's generated rather than waiting for the full response.
+### CPU Only (Default)
+No changes needed. Works everywhere; responses may take 2–5 minutes.
 
 ---
 
@@ -152,36 +133,33 @@ This works on any machine but responses may take 2–5 minutes. The streaming in
 
 ```
 chatbot_vector/
-├── docker-compose.yml          # All services: web, ollama, db, redis, ollama-init
-├── .env.example                # Environment variable template
+├── docker-compose.yml              # All services: web, ollama, db, redis, ollama-init
+├── .env.example                    # Environment variable template
 ├── README.md
 ├── docs/
-│   └── report.pdf              # Technical report
+│   └── report.pdf                  # Technical report
 └── webapp/
     ├── Dockerfile
     ├── requirements.txt
     ├── manage.py
     ├── wait_for_db.py
-    ├── config/                 # Django settings, urls, wsgi
-    │   ├── settings.py
-    │   ├── urls.py
-    │   └── wsgi.py
-    ├── chat/                   # Chat app
-    │   ├── models.py           # KnowledgeEntry, ChatSession, ChatMessage
-    │   ├── views.py            # Chat interface + REST API + SSE streaming
-    │   ├── llm.py              # Ollama integration + Hybrid RAG (vector + keyword)
-    │   ├── admin.py            # Django Admin configuration
+    ├── config/                     # Django settings, urls, wsgi
+    ├── chat/                       # Core chat application
+    │   ├── models.py               # KnowledgeEntry, ChatSession, ChatMessage
+    │   ├── views.py                # Chat interface + REST API + SSE streaming
+    │   ├── llm.py                  # Ollama integration + Structured Hybrid RAG
+    │   ├── admin.py
     │   └── templates/chat/index.html
-    ├── scraper/                # Data collection
+    ├── scraper/                    # Data collection pipelines
     │   └── management/commands/
-    │       ├── scrape_website.py       # BeautifulSoup crawler (~542 pages)
-    │       ├── scrape_dynamic.py       # Playwright scraper (JS-rendered pages)
-    │       ├── scrape_pdfs.py          # PDF text extraction (~78 documents)
-    │       ├── scrape_obs_bologna.py   # Bologna/OBS academic data (~1,200 pages)
-    │       ├── load_knowledge.py       # Seed data loader
-    │       └── generate_embeddings.py  # pgvector embedding generation
+    │       ├── scrape_website.py           # BeautifulSoup crawler (~542 pages)
+    │       ├── scrape_dynamic.py           # Playwright scraper (JS-rendered pages)
+    │       ├── scrape_pdfs.py              # PDF text extraction (~78 documents)
+    │       ├── scrape_obs_bologna.py       # Bologna/OBS academic data (~1,783 pages)
+    │       ├── load_knowledge.py           # Seed data loader
+    │       └── generate_embeddings.py      # pgvector embedding generation
     └── fixtures/
-        └── knowledge_fixture.json.gz   # Pre-scraped knowledge base (with embeddings)
+        └── knowledge_fixture.json.gz       # Pre-scraped knowledge base (with embeddings)
 ```
 
 ---
@@ -189,49 +167,34 @@ chatbot_vector/
 ## REST API
 
 ### `POST /api/chat/`
-Send a question and receive a complete AI-generated answer.
-
-**Request:**
 ```json
-{ "question": "Bilgisayar Mühendisliği programı hakkında bilgi verir misin?" }
-```
+// Request
+{ "question": "Bilgisayar Mühendisliği bölüm başkanı kim?" }
 
-**Response:**
-```json
+// Response
 {
-  "answer": "Acıbadem Üniversitesi Bilgisayar Mühendisliği programı...",
-  "response_time_ms": 14200
+  "answer": "Bilgisayar Mühendisliği Bölüm Başkanı Prof. Dr. Ahmet BULUT'tur.",
+  "response_time_ms": 10061
 }
 ```
 
 ### `POST /api/stream/`
-Same as `/api/chat/` but streams the answer token by token via Server-Sent Events (SSE). The chat interface uses this endpoint by default.
-
-**Response (SSE stream):**
+Same as `/api/chat/` but streams via Server-Sent Events (SSE):
 ```
-data: {"token": "Acı"}
-data: {"token": "badem"}
-data: {"token": " Üniversitesi"}
+data: {"token": "Bilgisayar"}
+data: {"token": " Mühendisliği"}
 ...
-data: {"done": true, "response_time_ms": 14200}
+data: {"done": true, "response_time_ms": 10061}
 ```
 
 ### `GET /api/status/`
-Check system status.
-
 ```json
-{
-  "status": "ok",
-  "model": "llama3.2:3b",
-  "knowledge_entries": 2410
-}
+{ "status": "ok", "model": "llama3.2:3b", "knowledge_entries": 2411 }
 ```
 
 ---
 
 ## Knowledge Base
-
-Data collected from public sources (scraped March 2026):
 
 | Source | Method | Entries |
 |--------|--------|---------|
@@ -239,44 +202,77 @@ Data collected from public sources (scraped March 2026):
 | obs.acibadem.edu.tr (Bologna) | Playwright + BeautifulSoup | ~1,783 |
 | PDF documents | pdfplumber | ~78 |
 | mevzuat.gov.tr | PDF scraper | ~7 |
-| **Total** | | **~2,410** |
+| Manual additions | Django shell | ~1 |
+| **Total** | | **~2,411** |
 
-All entries are stored with 768-dimensional `nomic-embed-text` embeddings in PostgreSQL (pgvector). The fixture ships with embeddings pre-computed — no re-generation needed on fresh installs.
-
----
-
-## AI Integration
-
-- **Chat Model:** `llama3.2:3b` via [Ollama](https://ollama.com) — runs entirely locally, no external API
-- **Embedding Model:** `nomic-embed-text` via Ollama — 768-dimensional vectors for semantic search
-- **Serving:** Ollama HTTP API with streaming (`/api/chat`, `/api/embeddings`)
-- **Context window:** 2,048 tokens
-- **RAG Strategy:** Hybrid search (vector + keyword)
-  - Question is embedded into a 768-dim vector
-  - pgvector cosine similarity retrieves top 50 candidates
-  - Keyword scoring with Turkish character normalization (ş→s, ö→o, etc.)
-  - Results combined: `0.5 × vector_score + 0.5 × keyword_score`, top 5 selected
-  - Smart excerpt: finds the most relevant 800-char window within long documents
-  - Regulation-based answers automatically include a disclaimer to consult an advisor
-- **Streaming:** Responses stream token by token via SSE (Server-Sent Events)
-- **Caching:** Redis (answers: 1-hour TTL, embeddings: 24-hour TTL)
-- **System Prompt:** Turkish, university-scoped, grounded in retrieved context
+All entries stored with 768-dimensional `nomic-embed-text` embeddings in PostgreSQL (pgvector). The fixture ships with pre-computed embeddings — no re-generation needed on fresh installs.
 
 ---
 
-## Bonus Features Implemented
+## AI & RAG Implementation
 
-- ✅ **Streaming responses (SSE)** — answers appear token by token, no waiting for full response
-- ✅ **Hybrid RAG (vector + keyword)** — combines pgvector cosine similarity with keyword scoring
-- ✅ **Turkish character normalization** — "bolum baskani" correctly matches "bölüm başkanı"
-- ✅ **pgvector (PostgreSQL)** — 768-dim embeddings stored natively, no separate vector DB needed
-- ✅ **Redis caching** — repeated questions answered instantly (1h TTL), embeddings cached (24h TTL)
-- ✅ **Playwright scraping** — handles JavaScript-rendered pages (news, announcements, dynamic content)
-- ✅ **PDF scraping** — extracts text from university PDF documents and regulation files via pdfplumber
-- ✅ **Bologna/OBS scraping** — full academic program and course catalog database
-- ✅ **Smart excerpt** — sliding window finds the most relevant section in long documents
-- ✅ **Pre-built embeddings fixture** — `knowledge_fixture.json.gz` ships with embeddings, no recomputation on fresh install
-- ✅ **Background embedding generation** — server starts immediately, embeddings generated in background
+### Models
+- **Chat:** `llama3.2:3b` via Ollama — fully local, no external API
+- **Embedding:** `nomic-embed-text` — 768-dim vectors
+- **Context window:** 4,096 tokens | **Max output:** 500 tokens
+
+### Structured Hybrid RAG (`llm.py`)
+
+**Category Routing**
+Questions are classified into one of 9 categories (fees, programs, admission, campus, contact, international, student_life, research, courses) using keyword matching. Vector search is then scoped to that category for higher precision.
+
+**Fallback Logic**
+- If category-filtered results score below `0.45`, retries across all categories
+- If global results score below `0.40`, returns empty context — model responds with "no information" instead of hallucinating
+
+**Hybrid Scoring**
+```
+score = 0.5 × vector_score + 0.5 × keyword_score
+```
+Vector candidates: pgvector cosine similarity (top 50 pool)
+Keyword candidates: PostgreSQL `ILIKE` filter (replaces full Python table scan)
+
+**Post-processing**
+- Non-Latin character filter (strips CJK/Arabic hallucinations)
+- Turkish vowel harmony correction (e.g. `BULUT'dür` → `BULUT'dur`)
+
+**Smart Excerpt**
+Sliding 800-char window finds the densest keyword match within long documents.
+
+**Caching**
+- Embeddings: Redis 24h TTL
+- Answers: Redis 1h TTL
+
+---
+
+## Implemented Features
+
+- ✅ **Streaming SSE** — token-by-token responses, no waiting
+- ✅ **Structured Hybrid RAG** — category routing + vector + keyword
+- ✅ **PostgreSQL keyword search** — DB-side filtering (no full table scan)
+- ✅ **Relevance threshold** — prevents hallucination from low-confidence results
+- ✅ **Turkish character normalization** — "bolum baskani" matches "bölüm başkanı"
+- ✅ **Post-processing** — non-Latin character filter + vowel harmony correction
+- ✅ **pgvector** — 768-dim embeddings in PostgreSQL, no separate vector DB
+- ✅ **Redis caching** — instant repeat answers, cached embeddings
+- ✅ **Playwright scraping** — JS-rendered pages (news, announcements)
+- ✅ **PDF scraping** — pdfplumber extracts university documents and regulations
+- ✅ **Bologna/OBS scraping** — full academic program and course catalog
+- ✅ **Pre-built embeddings fixture** — sub-30-second startup on re-runs
+- ✅ **Regulation-aware prompting** — rules/regulations include advisor disclaimer
+
+---
+
+## Future Improvements
+
+**Short-term**
+UI redesign (timestamps, typing indicators, mobile responsiveness); dark/light mode toggle; upvote/downvote feedback; upgrade to `llama3.1:8b`
+
+**Medium-term**
+CI/CD via GitHub Actions; Kubernetes migration; benchmark vs `mistral:7b` / `llama3.1:8b` / `gemma2:9b`; auto language detection; source URL surfacing in responses
+
+**Long-term**
+GPU acceleration (MPS/CUDA) targeting 2–3s response times; OBS integration for personalized student data; Elasticsearch + BM25 for Turkish morphological analysis
 
 ---
 
@@ -287,18 +283,12 @@ cd webapp
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Start PostgreSQL and Redis locally, then:
 python manage.py migrate
 python manage.py createsuperuser
 python manage.py runserver
-
-# Scrape data (optional — use fixture instead)
-python manage.py scrape_website --max 500
-python manage.py scrape_dynamic --max-links 300
-python manage.py scrape_pdfs
 ```
 
-Run Ollama locally and update your `.env`:
+Run Ollama locally:
 ```bash
 ollama pull llama3.2:3b
 ollama pull nomic-embed-text

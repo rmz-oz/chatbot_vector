@@ -3,8 +3,8 @@ LLM + Vector RAG integration.
 
 Flow:
 1. get_embedding(text)        → Ollama /api/embeddings (nomic-embed-text, 768-dim)
-2. retrieve_context(question) → pgvector cosine similarity search
-3. smart_excerpt(content, q)  → finds most relevant 2000-char window in large docs
+2. retrieve_context(question) → category routing + pgvector cosine similarity + keyword search
+3. smart_excerpt(content, q)  → finds most relevant 800-char window in large docs
 4. chat(question, history)    → builds prompt, calls Ollama /api/chat (llama3.2:3b)
 
 Redis cache:
@@ -14,6 +14,7 @@ Redis cache:
 
 import hashlib
 import logging
+import re
 
 import requests
 from django.conf import settings
@@ -25,6 +26,33 @@ logger = logging.getLogger(__name__)
 
 EMBED_CACHE_TTL  = 86400   # 24 hours
 ANSWER_CACHE_TTL = 3600    # 1 hour
+
+# Strips non-Latin/non-Turkish characters (CJK, Arabic, etc.) from model output
+_NON_LATIN = re.compile(r"[^\u0000-\u024F\u0300-\u036F\s]")
+
+# Fixes Turkish vowel harmony errors in copula suffixes (e.g. BULUT'dür → BULUT'dur)
+_COPULA_RE = re.compile(r"(\w+)['\u2019]([dt][ıiuü]r)", re.UNICODE)
+
+
+def _fix_vowel_harmony(text: str) -> str:
+    """Fix vowel harmony in Turkish copula suffixes attached to proper nouns."""
+    def _correct(m: re.Match) -> str:
+        word, suffix = m.group(1), m.group(2)
+        last_vowel = next((c for c in reversed(word) if c in "aeıioöuüAEIİOÖUÜ"), None)
+        if last_vowel is None:
+            return m.group(0)
+        lv = last_vowel.lower()
+        if lv in "aı":
+            v = "ı"
+        elif lv in "ei":
+            v = "i"
+        elif lv in "ou":
+            v = "u"
+        else:  # öü
+            v = "ü"
+        return f"{word}'{suffix[0]}{v}r"
+
+    return _COPULA_RE.sub(_correct, text)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -54,7 +82,7 @@ def get_embedding(text: str) -> list[float] | None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. HYBRID RETRIEVAL (Vector + Keyword)
+# 2. HYBRID RETRIEVAL (Vector + Keyword + Category Routing)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _normalize_tr(text: str) -> str:
@@ -63,61 +91,82 @@ def _normalize_tr(text: str) -> str:
     return text.translate(tr_map)
 
 
-def _keyword_scores(words: list[str], limit: int) -> dict[int, float]:
-    """Return {entry_id: keyword_score} for entries matching specific words."""
+# Normalized keyword map for category classification
+_CATEGORY_KEYWORDS: dict[str, list[str]] = {
+    "fees":          ["ucret", "fiyat", "burs", "odeme", "harc", "scholarship", "fee", "maliyet", "para"],
+    "programs":      ["bolum", "program", "lisans", "yuksek lisans", "doktora", "fakulte", "mufredat", "ogretim"],
+    "admission":     ["kayit", "kabul", "basvuru", "yatay gecis", "yks", "puan", "sart", "kosul", "nasil girilir"],
+    "campus":        ["kampus", "yurt", "kutuphane", "kafeterya", "spor", "tesis", "ulasim", "bina", "yerlesim"],
+    "contact":       ["iletisim", "adres", "telefon", "email", "nerede", "nasil gidilir"],
+    "international": ["uluslararasi", "yabanci", "erasmus", "exchange", "international", "uyruk"],
+    "student_life":  ["ogrenci", "kulup", "etkinlik", "sosyal", "aktivite", "topluluk"],
+    "research":      ["arastirma", "proje", "laboratuvar", "yayin", "bilimsel", "makale"],
+    "courses":       ["ders", "kredi", "syllabus", "kurs", "secmeli", "zorunlu"],
+}
+
+
+def _classify_category(question: str) -> str | None:
+    """Return the best-matching category for the question, or None if ambiguous."""
+    q_norm = _normalize_tr(question.lower())
+    best_cat, best_score = None, 0
+    for cat, keywords in _CATEGORY_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in q_norm)
+        if score > best_score:
+            best_score, best_cat = score, cat
+    return best_cat if best_score > 0 else None
+
+
+def _keyword_scores(words: list[str], limit: int, category: str | None = None) -> dict[int, float]:
+    """
+    Return {entry_id: keyword_score} using PostgreSQL filtering instead of a
+    full table scan. The DB pre-filters matching rows; Python only scores those.
+    """
     from django.db.models import Q
-    # Only use words longer than 4 chars to avoid common Turkish suffixes/words
-    specific = [w for w in words if len(w) > 4]
-    if not specific:
-        specific = words  # fallback to all words if none are long enough
+
+    specific = [w for w in words if len(w) > 4] or words
     if not specific:
         return {}
-    # Entry must match at least 2 specific words (or all if fewer than 2)
-    min_match = min(2, len(specific))
-    scores: dict[int, float] = {}
+
+    q = Q()
+    for w in specific:
+        q |= Q(title__icontains=w) | Q(keywords__icontains=w) | Q(content__icontains=w)
+
+    qs = KnowledgeEntry.objects.filter(q)
+    if category:
+        qs = qs.filter(category=category)
+    qs = qs.only("pk", "title", "keywords", "content")[: limit * 3]
+
     specific_norm = [_normalize_tr(w) for w in specific]
-    for entry in KnowledgeEntry.objects.all().iterator():
-        title_kw = _normalize_tr((entry.title + " " + (entry.keywords or "")).lower())
-        content  = _normalize_tr(entry.content.lower())
+    scores: dict[int, float] = {}
+    for entry in qs:
+        title_kw     = _normalize_tr((entry.title + " " + (entry.keywords or "")).lower())
+        content      = _normalize_tr(entry.content.lower())
         title_hits   = sum(1 for w in specific_norm if w in title_kw)
         content_hits = sum(1 for w in specific_norm if w in content)
-        if title_hits + content_hits >= min_match:
-            score = title_hits * 3.0 + content_hits * 1.0
-            scores[entry.pk] = score
-    # Return top `limit` by score
-    top = sorted(scores.items(), key=lambda x: -x[1])[:limit]
-    return dict(top)
+        if title_hits + content_hits > 0:
+            scores[entry.pk] = title_hits * 3.0 + content_hits * 1.0
+
+    return dict(sorted(scores.items(), key=lambda x: -x[1])[:limit])
 
 
-def retrieve_context(question: str) -> list:
-    """
-    Hybrid search: combine vector (cosine similarity) + keyword scores,
-    rerank and return top RAG_MAX_ENTRIES results.
-    """
+def _do_retrieve(question: str, words: list[str], vector: list[float] | None,
+                 category: str | None, limit: int, pool: int) -> tuple[list, float]:
+    """Core retrieval logic. Returns (entries, best_score)."""
     from pgvector.django import CosineDistance
 
-    limit   = settings.RAG_MAX_ENTRIES
-    pool    = limit * 10         # candidate pool size for vector search
-    words   = [_normalize_tr(w) for w in question.lower().split() if len(w) > 2]
-
-    # ── Vector candidates ────────────────────────────────────────────────────
-    vector        = get_embedding(question)
-    vector_scores: dict[int, float] = {}  # {pk: similarity 0-1}
+    vector_scores: dict[int, float] = {}
     entries_by_pk: dict[int, object] = {}
 
     if vector:
-        qs = (
-            KnowledgeEntry.objects
-            .exclude(embedding=None)
-            .annotate(dist=CosineDistance("embedding", vector))
-            .order_by("dist")[:pool]
-        )
+        qs = KnowledgeEntry.objects.exclude(embedding=None)
+        if category:
+            qs = qs.filter(category=category)
+        qs = qs.annotate(dist=CosineDistance("embedding", vector)).order_by("dist")[:pool]
         for e in qs:
             vector_scores[e.pk] = 1.0 - float(e.dist)
             entries_by_pk[e.pk] = e
 
-    # ── Keyword candidates ───────────────────────────────────────────────────
-    kw_scores = _keyword_scores(words, pool)
+    kw_scores = _keyword_scores(words, pool, category=category)
     for pk in kw_scores:
         if pk not in entries_by_pk:
             try:
@@ -126,22 +175,56 @@ def retrieve_context(question: str) -> list:
                 pass
 
     if not entries_by_pk:
-        return []
+        return [], 0.0
 
-    # ── Combine & rerank ─────────────────────────────────────────────────────
-    # Normalize keyword scores to [0, 1]
-    max_kw = max(kw_scores.values(), default=1.0)
-    # Median vector score used as baseline for keyword-only entries
-    all_v = list(vector_scores.values())
+    max_kw     = max(kw_scores.values(), default=1.0)
+    all_v      = list(vector_scores.values())
     v_baseline = sorted(all_v)[len(all_v) // 2] if all_v else 0.5
+
     combined: list[tuple[float, object]] = []
     for pk, entry in entries_by_pk.items():
-        v_score  = vector_scores.get(pk, v_baseline)   # 0-1 (baseline if not in vector pool)
-        kw_score = kw_scores.get(pk, 0.0) / max_kw     # 0-1 normalized
+        v_score  = vector_scores.get(pk, v_baseline)
+        kw_score = kw_scores.get(pk, 0.0) / max_kw
         combined.append((0.5 * v_score + 0.5 * kw_score, entry))
 
     combined.sort(key=lambda t: -t[0])
-    return [e for _, e in combined[:limit]]
+    best_score = combined[0][0] if combined else 0.0
+    return [e for _, e in combined[:limit]], best_score
+
+
+# If category-filtered best score is below this, retry without category filter.
+_CATEGORY_SCORE_THRESHOLD = 0.45
+
+# If global best score is below this, return nothing to avoid hallucination.
+_MIN_RELEVANCE_SCORE = 0.40
+
+
+def retrieve_context(question: str) -> list:
+    """
+    Hybrid search: category routing → vector + keyword, with fallback.
+    If category-filtered results are low-confidence, retries without filter.
+    If global results are still low-confidence, returns empty (no context).
+    """
+    limit    = settings.RAG_MAX_ENTRIES
+    pool     = limit * 10
+    words    = [_normalize_tr(w) for w in question.lower().split() if len(w) > 2]
+    category = _classify_category(question)
+    vector   = get_embedding(question)
+
+    if category:
+        entries, best = _do_retrieve(question, words, vector, category, limit, pool)
+        if best >= _CATEGORY_SCORE_THRESHOLD:
+            logger.debug("Category routing: '%s' → %s (score %.2f)", question[:60], category, best)
+            return entries
+        logger.debug("Category fallback: '%s' score %.2f < %.2f", question[:60], best, _CATEGORY_SCORE_THRESHOLD)
+
+    entries, best = _do_retrieve(question, words, vector, None, limit, pool)
+
+    if best < _MIN_RELEVANCE_SCORE:
+        logger.debug("Low relevance (%.2f) for '%s' — returning no context", best, question[:60])
+        return []
+
+    return entries
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -150,7 +233,7 @@ def retrieve_context(question: str) -> list:
 
 def smart_excerpt(content: str, question: str, window: int = 800, step: int = 200) -> str:
     """
-    For long documents: slide a window and return the 2000-char slice
+    For long documents: slide a window and return the 800-char slice
     where question keywords appear most densely.
     """
     if len(content) <= window:
@@ -175,23 +258,25 @@ def smart_excerpt(content: str, question: str, window: int = 800, step: int = 20
 SYSTEM_PROMPT = """Sen Acıbadem Mehmet Ali Aydınlar Üniversitesi'nin resmi AI asistanısın.
 Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 
-- Bağlamda cevap yoksa: "Bu konuda elimde bilgi bulunmuyor, lütfen üniversiteyle iletişime geçin."
+- Yanıtlarını YALNIZCA Türkçe yaz. İngilizce kelime, ifade veya açıklama ekleme. "meaning", "so", "therefore", "thus" gibi İngilizce bağlaç veya kelimeler kullanma.
+- Bağlamda cevap yoksa SADECE şunu yaz: "Bu konuda elimde bilgi bulunmuyor, lütfen üniversiteyle iletişime geçin." Başka hiçbir şey ekleme.
+- Bilgi bulunamadığında bağlamda geçen program veya bölüm adlarını ASLA yanıta ekleme. Kullanıcı sormadıysa program adı belirtme.
 - Kısa, net ve bilgilendirici cevap ver.
 - Bağlamdaki kişi isimlerini, unvanları ve adresleri AYNEN kullan. Hiçbir ismi değiştirme, gizleme veya [Adı] gibi yer tutucu ile değiştirme.
 - Yönetmelik veya kural içeren cevaplarda sonuna ekle: "Kesin bilgi için danışmanınıza başvurun."
 - Bir programa ait kuralı tüm üniversiteye genelleme.
+- Bir kural yaz okulu, belirli bir program veya özel bir koşula özgüyse bunu AÇIKÇA belirt.
+- Bağlamda "X-Y" şeklinde bir aralık varsa ve kullanıcı maksimumu soruyorsa Y değerini kullan. Sayısal aralıkları toplarken en yüksek değeri kullan.
 """
 
 
 def chat(question: str, history: list[dict] | None = None) -> str:
     """Send question + vector-retrieved context to Ollama and return the answer."""
-    # Cache check
     cache_key = "ans:" + hashlib.md5(question.encode()).hexdigest()
     cached = cache.get(cache_key)
     if cached:
         return cached
 
-    # Retrieve relevant knowledge
     entries = retrieve_context(question)
     context_parts = []
     for entry in entries:
@@ -201,7 +286,6 @@ def chat(question: str, history: list[dict] | None = None) -> str:
 
     context_block = "\n\n".join(context_parts) if context_parts else "Bilgi bulunamadı."
 
-    # Build messages
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     if history:
         messages.extend(history[-6:])
@@ -211,7 +295,6 @@ def chat(question: str, history: list[dict] | None = None) -> str:
         f"{context_block}\n\nSoru: {question}"
     )})
 
-    # Call Ollama
     try:
         resp = requests.post(
             f"{settings.OLLAMA_URL}/api/chat",
@@ -219,12 +302,13 @@ def chat(question: str, history: list[dict] | None = None) -> str:
                 "model":    settings.OLLAMA_MODEL,
                 "messages": messages,
                 "stream":   False,
-                "options":  {"temperature": 0.3, "num_ctx": 2048, "num_predict": 200},
+                "options":  {"temperature": 0.3, "num_ctx": 4096, "num_predict": 500},
             },
             timeout=180,
         )
         resp.raise_for_status()
-        answer = resp.json()["message"]["content"].strip()
+        raw    = resp.json()["message"]["content"]
+        answer = _fix_vowel_harmony(_NON_LATIN.sub("", raw)).strip()
         cache.set(cache_key, answer, ANSWER_CACHE_TTL)
         return answer
 
@@ -263,7 +347,7 @@ def chat_stream(question: str, history: list[dict] | None = None):
                 "model":    settings.OLLAMA_MODEL,
                 "messages": messages,
                 "stream":   True,
-                "options":  {"temperature": 0.3, "num_ctx": 2048, "num_predict": 200},
+                "options":  {"temperature": 0.3, "num_ctx": 4096, "num_predict": 500},
             },
             stream=True,
             timeout=180,
@@ -275,7 +359,7 @@ def chat_stream(question: str, history: list[dict] | None = None):
             import json as _json
             try:
                 chunk = _json.loads(line)
-                token = chunk.get("message", {}).get("content", "")
+                token = _fix_vowel_harmony(_NON_LATIN.sub("", chunk.get("message", {}).get("content", "")))
                 if token:
                     yield token
                 if chunk.get("done"):
