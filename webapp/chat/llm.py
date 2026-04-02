@@ -296,6 +296,13 @@ Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 """
 
 
+def _programs_summary_direct(entries: list) -> str | None:
+    """Return programs summary content directly if it's the first entry (bypass LLM)."""
+    if entries and entries[0].source_url == _PROGRAMS_SUMMARY_URL:
+        return entries[0].content
+    return None
+
+
 def chat(question: str, history: list[dict] | None = None) -> str:
     """Send question + vector-retrieved context to Ollama and return the answer."""
     cache_key = "ans:" + hashlib.md5(question.encode()).hexdigest()
@@ -304,6 +311,11 @@ def chat(question: str, history: list[dict] | None = None) -> str:
         return cached
 
     entries = retrieve_context(question)
+
+    direct = _programs_summary_direct(entries)
+    if direct:
+        cache.set(cache_key, direct, ANSWER_CACHE_TTL)
+        return direct
     context_parts = []
     for entry in entries:
         excerpt = entry.content if entry.source_url == _PROGRAMS_SUMMARY_URL else smart_excerpt(entry.content, question)
@@ -350,6 +362,12 @@ def chat(question: str, history: list[dict] | None = None) -> str:
 def chat_stream(question: str, history: list[dict] | None = None):
     """Generator: yields text chunks from Ollama stream for SSE."""
     entries = retrieve_context(question)
+
+    direct = _programs_summary_direct(entries)
+    if direct:
+        yield direct
+        return
+
     context_parts = []
     for entry in entries:
         excerpt = entry.content if entry.source_url == _PROGRAMS_SUMMARY_URL else smart_excerpt(entry.content, question)
