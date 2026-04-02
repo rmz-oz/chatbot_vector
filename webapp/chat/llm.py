@@ -28,7 +28,8 @@ EMBED_CACHE_TTL  = 86400   # 24 hours
 ANSWER_CACHE_TTL = 3600    # 1 hour
 
 # Strips non-Latin/non-Turkish characters (CJK, Arabic, etc.) from model output
-_NON_LATIN = re.compile(r"[^\u0000-\u024F\u0300-\u036F\s]")
+# Keep common currency symbols: $ (U+0024, already in range), ₺ (U+20BA), € (U+20AC), £ (U+00A3, in range)
+_NON_LATIN = re.compile(r"[^\u0000-\u024F\u0300-\u036F\u20AC\u20BA\s]")
 
 # Fixes Turkish vowel harmony errors in copula suffixes (e.g. BULUT'dür → BULUT'dur)
 _COPULA_RE = re.compile(r"(\w+)['\u2019]([dt][ıiuü]r)", re.UNICODE)
