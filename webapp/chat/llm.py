@@ -460,12 +460,40 @@ def _retrieval_query(question: str, history: list[dict] | None) -> str:
     return f"{last_user[:200]} {question}"
 
 
+def _find_golden_answer(question: str) -> str | None:
+    """Return a previously upvoted answer if a golden entry matches closely (cosine similarity >= 0.90)."""
+    vector = get_embedding(question)
+    if not vector:
+        return None
+    try:
+        from pgvector.django import CosineDistance
+        entry = (
+            KnowledgeEntry.objects
+            .filter(category="golden")
+            .exclude(embedding=None)
+            .annotate(dist=CosineDistance("embedding", vector))
+            .order_by("dist")
+            .first()
+        )
+        if entry and entry.dist <= 0.10:  # cosine distance ≤ 0.10 → similarity ≥ 0.90
+            logger.info("Golden answer hit for: %.100s (dist=%.4f)", question, entry.dist)
+            return entry.content
+    except Exception as e:
+        logger.error("Golden answer lookup error: %s", e)
+    return None
+
+
 def chat(question: str, history: list[dict] | None = None) -> str:
     """Send question + vector-retrieved context to Ollama and return the answer."""
     cache_key = "ans:" + hashlib.md5(question.encode()).hexdigest()
     cached = cache.get(cache_key)
     if cached:
         return cached
+
+    golden = _find_golden_answer(question)
+    if golden:
+        cache.set(cache_key, golden, ANSWER_CACHE_TTL)
+        return golden
 
     entries = retrieve_context(_retrieval_query(question, history))
 
