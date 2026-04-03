@@ -257,6 +257,9 @@ The last user message is prepended to the current question before embedding, so 
 **Curated Injection / LLM Bypass**
 For known broad queries (programs list, scholarships, international application, contact, transport, dorms, double-major), curated summary entries are injected at the top of results. If the top result is a bypass URL, the LLM is skipped entirely and the curated content is returned directly — eliminating hallucination for these high-traffic topics.
 
+**Golden Answer System**
+When a user upvotes a response, the question–answer pair is saved as a `golden` category `KnowledgeEntry` with a pre-computed embedding. On subsequent questions, the RAG pipeline checks golden entries first (before normal retrieval); if cosine similarity ≥ 0.90, the approved answer is returned directly without calling the LLM.
+
 **Post-processing**
 - Non-Latin character filter (strips CJK/Arabic hallucinations, preserves ₺ and €)
 - Turkish vowel harmony correction (e.g. `BULUT'dür` → `BULUT'dur`)
@@ -285,6 +288,7 @@ Sliding 800-char window finds the densest keyword match within long documents. B
 - ✅ **Redis caching** — instant repeat answers, cached embeddings
 - ✅ **Multi-session UI** — sidebar with session history, dark/light mode, mobile responsive
 - ✅ **Upvote/downvote feedback** — stored per message; admin stats page + downvote logging
+- ✅ **Golden answer system** — upvoted answers saved as curated entries with embeddings; similar future questions bypass LLM and return the approved answer directly (≥90% cosine similarity threshold)
 - ✅ **Admin knowledge entry editor** — edit content + auto embedding refresh on save
 - ✅ **Rate limiting** — 10 req/min per IP via Redis; 429 errors shown as chat bubbles
 - ✅ **loaddata skip** — fixture only loaded on fresh DB; `docker restart` preserves live data

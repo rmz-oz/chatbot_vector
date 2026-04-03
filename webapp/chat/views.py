@@ -9,10 +9,31 @@ from django.shortcuts import render
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.views.decorators.http import require_POST
 
-from chat.models import ChatSession, ChatMessage
+from chat.models import ChatSession, ChatMessage, KnowledgeEntry
 from chat import llm
 
 _feedback_log = logging.getLogger("chat.feedback")
+
+
+def _save_golden_answer(question: str, answer: str, message_id: int) -> None:
+    """Save an upvoted Q&A pair as a golden KnowledgeEntry for future retrieval."""
+    source_url = f"golden://{message_id}"
+    vector = llm.get_embedding(question)
+    entry, created = KnowledgeEntry.objects.update_or_create(
+        source_url=source_url,
+        defaults={
+            "title":    question[:200],
+            "content":  answer,
+            "category": "golden",
+            "embedding": vector,
+        },
+    )
+    _feedback_log.info(
+        "GOLDEN %s | id=%d | Q: %.200s",
+        "created" if created else "updated",
+        message_id,
+        question,
+    )
 
 # Rate limiting: max 10 requests per minute per IP
 _RATE_LIMIT      = 10
@@ -216,16 +237,20 @@ def message_feedback(request, message_id):
         msg.feedback = feedback
         msg.save(update_fields=["feedback"])
 
+        preceding = ChatMessage.objects.filter(
+            session=msg.session, role="user", timestamp__lt=msg.timestamp
+        ).order_by("-timestamp").first()
+
         if feedback == "down":
-            preceding = ChatMessage.objects.filter(
-                session=msg.session, role="user", timestamp__lt=msg.timestamp
-            ).order_by("-timestamp").first()
             _feedback_log.warning(
                 "DOWNVOTE | id=%d | Q: %.300s | A: %.300s",
                 msg.id,
                 preceding.content if preceding else "—",
                 msg.content,
             )
+
+        if feedback == "up" and preceding:
+            _save_golden_answer(preceding.content, msg.content, msg.id)
 
         return JsonResponse({"status": "ok"})
     except ChatMessage.DoesNotExist:
