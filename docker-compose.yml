@@ -73,7 +73,6 @@ services:
         python wait_for_db.py &&
         python manage.py migrate --noinput &&
         python manage.py collectstatic --noinput &&
-        python -c 'import django,os; os.environ.setdefault("DJANGO_SETTINGS_MODULE","config.settings"); django.setup(); from chat.models import KnowledgeEntry; exit(0 if KnowledgeEntry.objects.exists() else 1)' || python manage.py loaddata /app/fixtures/knowledge_fixture.json.gz &&
         (python manage.py generate_embeddings || echo 'Embedding generation skipped') &
         gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --worker-class gevent --timeout 200
       "
