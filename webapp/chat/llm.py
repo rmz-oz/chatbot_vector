@@ -217,6 +217,7 @@ _TRANSFER_URL          = "https://www.acibadem.edu.tr/aday/ogrenci/yatay-gecis-o
 _PREP_URL              = "https://www.acibadem.edu.tr/aday/ogrenci/ingilizce-hazirlik-ozet"
 _PAYMENT_URL           = "https://www.acibadem.edu.tr/ogrenci/odeme-yontemleri-ozet"
 _CALENDAR_URL          = "https://www.acibadem.edu.tr/ogrenci/akademik-takvim-ozet"
+_DEPT_HEADS_URL        = "https://www.acibadem.edu.tr/akademik/bolum-baskanlari-ozet"
 
 _INTL_APPLY_RE = re.compile(
     r"(nasil|nasıl).*(basvur|başvur|kayit|kayıt)|"
@@ -276,6 +277,13 @@ _PREP_RE = re.compile(
 _PAYMENT_RE = re.compile(
     r"odeme|ödeme|taksit|havale|banka|nasil.*(ode|öde)|(ode|öde).*nasil|"
     r"kyk.*(odeme|ödeme)|online.*(ode|öde)|ne zaman.*(ode|öde)",
+    re.IGNORECASE,
+)
+
+_DEPT_HEADS_RE = re.compile(
+    r"(tum|tüm).*(bolum|bölüm).*(baskan|başkan)|"
+    r"(bolum|bölüm).*(baskan|başkan).*(hepsi|tum|tüm|kimler\?*$)|"
+    r"(baskan|başkan).*(hepsi|tum|tüm)\b",
     re.IGNORECASE,
 )
 
@@ -373,6 +381,9 @@ def _inject_summary(question: str, entries: list, limit: int) -> list:
     if _PAYMENT_RE.search(q_norm):
         _maybe_inject(_PAYMENT_URL, "payment summary")
 
+    if _DEPT_HEADS_RE.search(q_norm):
+        _maybe_inject(_DEPT_HEADS_URL, "dept heads summary")
+
     if _CALENDAR_RE.search(q_norm):
         _maybe_inject(_CALENDAR_URL, "calendar summary")
 
@@ -432,6 +443,7 @@ _BYPASS_URLS = {
     _PROGRAMS_SUMMARY_URL, _INTL_APPLY_URL, _SCHOLARSHIPS_URL,
     _CONTACT_URL, _TRANSPORT_URL, _DORM_URL, _DOUBLE_MAJOR_URL,
     _FEES_URL, _TRANSFER_URL, _PREP_URL, _PAYMENT_URL, _CALENDAR_URL,
+    _DEPT_HEADS_URL,
 }
 
 
@@ -442,14 +454,23 @@ def _direct_response(entries: list) -> str | None:
     return None
 
 
-def _retrieval_query(question: str, history: list[dict] | None) -> str:
-    """Build an enriched query for RAG retrieval using recent conversation context.
+_FOLLOWUP_RE = re.compile(
+    r"^(peki|ya|o zaman|onun|bunun|onlar|bunlar|o|bu|kaç|ne kadar|nasıl|nerede|ne zaman|kim)\b|"
+    r"\b(da|de|mi|mu|mı|mü)\?*$",
+    re.IGNORECASE,
+)
 
-    Follow-up questions like "peki ücreti ne kadar?" are ambiguous without
-    the previous turn. Prepend the last user message so the embedding captures
-    the full intent.
+def _retrieval_query(question: str, history: list[dict] | None) -> str:
+    """Enrich retrieval query with previous context only for short follow-up questions.
+
+    Only prepends the last user message when the current question is short
+    (≤6 words) or starts with a follow-up marker — avoiding context bleed
+    for independent questions like 'X akademik kadro kimler'.
     """
     if not history:
+        return question
+    word_count = len(question.split())
+    if word_count > 6 and not _FOLLOWUP_RE.search(question):
         return question
     last_user = next(
         (m["content"] for m in reversed(history) if m.get("role") == "user"),
@@ -475,7 +496,7 @@ def _find_golden_answer(question: str) -> str | None:
             .order_by("dist")
             .first()
         )
-        if entry and entry.dist <= 0.10:  # cosine distance ≤ 0.10 → similarity ≥ 0.90
+        if entry and entry.dist <= 0.05:  # cosine distance ≤ 0.05 → similarity ≥ 0.95
             logger.info("Golden answer hit for: %.100s (dist=%.4f)", question, entry.dist)
             return entry.content
     except Exception as e:
@@ -546,6 +567,11 @@ def chat(question: str, history: list[dict] | None = None) -> str:
 
 def chat_stream(question: str, history: list[dict] | None = None):
     """Generator: yields text chunks from Ollama stream for SSE."""
+    golden = _find_golden_answer(question)
+    if golden:
+        yield golden
+        return
+
     entries = retrieve_context(_retrieval_query(question, history))
 
     direct = _direct_response(entries)
