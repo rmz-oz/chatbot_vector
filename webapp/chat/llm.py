@@ -57,6 +57,53 @@ def _fix_vowel_harmony(text: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# LANGUAGE DETECTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Strong signal: any Turkish-specific Unicode character → language is Turkish
+_TR_CHARS = set("şŞğĞüÜöÖçÇıİ")
+
+# Common English question words / university-domain terms
+_EN_WORDS = {
+    "what", "how", "which", "where", "when", "who", "is", "are", "does",
+    "can", "tell", "about", "university", "program", "department",
+    "admission", "fee", "scholarship", "campus", "contact", "course",
+    "the", "a", "an", "do", "will", "have", "has", "get", "apply",
+    "student", "faculty", "tuition", "deadline", "requirement",
+}
+
+# Common Turkish function words (ASCII-normalised — no special chars needed)
+_TR_WORDS = {
+    "ne", "nasil", "hangi", "nerede", "kim", "nedir", "var", "icin",
+    "olan", "acaba", "mi", "mu", "ile", "kadar", "hakkinda",
+    "universite", "bolum", "program", "ders", "ogrenci", "kayit",
+    "basvuru", "ucret", "burs", "kampus", "iletisim",
+}
+
+
+def _detect_language(text: str) -> str:
+    """Return 'en' if the question appears to be English, 'tr' otherwise.
+
+    Algorithm (no external libraries):
+    1. Any Turkish Unicode character  → 'tr'  (fast path)
+    2. Count EN vs TR keyword hits    → majority wins
+    3. Default fallback               → 'tr'
+    """
+    if any(c in _TR_CHARS for c in text):
+        return "tr"
+
+    words = set(_normalize_tr(text.lower()).split())
+    en_hits = len(words & _EN_WORDS)
+    tr_hits = len(words & _TR_WORDS)
+
+    if en_hits > tr_hits:
+        logger.debug("Language detected: EN (en=%d, tr=%d) for: %.60s", en_hits, tr_hits, text)
+        return "en"
+
+    return "tr"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 1. EMBEDDING
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -422,7 +469,7 @@ def smart_excerpt(content: str, question: str, window: int = 800, step: int = 20
 # 4. CHAT
 # ─────────────────────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """Sen Acıbadem Mehmet Ali Aydınlar Üniversitesi'nin resmi AI asistanısın.
+SYSTEM_PROMPT_TR = """Sen Acıbadem Mehmet Ali Aydınlar Üniversitesi'nin resmi AI asistanısın.
 Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 
 - Yanıtlarını YALNIZCA Türkçe yaz. İngilizce kelime, ifade veya açıklama ekleme. "meaning", "so", "therefore", "thus" gibi İngilizce bağlaç veya kelimeler kullanma.
@@ -437,6 +484,43 @@ Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 - Bir kural yaz okulu, belirli bir program veya özel bir koşula özgüyse bunu AÇIKÇA belirt.
 - Bağlamda "X-Y" şeklinde bir aralık varsa ve kullanıcı maksimumu soruyorsa Y değerini kullan. Sayısal aralıkları toplarken en yüksek değeri kullan.
 """
+
+# Keep backward-compat alias
+SYSTEM_PROMPT = SYSTEM_PROMPT_TR
+
+SYSTEM_PROMPT_EN = """You are the official AI assistant of Acıbadem Mehmet Ali Aydınlar University.
+Answer questions using ONLY the provided context. Always respond in English.
+
+- Write your answers ONLY in English. Do not mix in Turkish words or phrases.
+- If the context does not contain the answer, write ONLY: "I don't have information on this topic. Please contact the university directly."
+- Do not mention program or department names from the context unless the user specifically asked about them.
+- Keep answers concise, clear, and informative. If the context contains a list or table, include ALL items without abbreviation.
+- Include URLs exactly as provided in the context, without shortening or modifying them (e.g. https://www.acibadem.edu.tr/...).
+- Use person names, titles, and addresses EXACTLY as they appear in the context. Never substitute with placeholders like [Name].
+- For answers involving regulations or rules, append: "For definitive information, please consult your academic advisor."
+- Do not generalise a rule that applies to one program to the entire university.
+- If a rule is specific to summer school, a particular program, or a special condition, state this EXPLICITLY.
+- If the context contains a range "X-Y" and the user asks for the maximum, use the Y value.
+"""
+
+
+def _get_system_prompt(lang: str) -> str:
+    """Return the appropriate system prompt for the detected language."""
+    return SYSTEM_PROMPT_EN if lang == "en" else SYSTEM_PROMPT_TR
+
+
+def _user_prompt(lang: str, context_block: str, question: str) -> str:
+    """Return the user-turn prompt in the detected language."""
+    if lang == "en":
+        return (
+            f"Use the following university information to answer the question.\n"
+            f"Note: the context may be in Turkish — extract the relevant facts and answer in English.\n\n"
+            f"{context_block}\n\nQuestion: {question}"
+        )
+    return (
+        f"Aşağıdaki üniversite bilgilerini kullanarak soruyu yanıtla:\n\n"
+        f"{context_block}\n\nSoru: {question}"
+    )
 
 
 _BYPASS_URLS = {
@@ -516,12 +600,14 @@ def chat(question: str, history: list[dict] | None = None) -> str:
         cache.set(cache_key, golden, ANSWER_CACHE_TTL)
         return golden
 
+    lang = _detect_language(question)
     entries = retrieve_context(_retrieval_query(question, history))
 
     direct = _direct_response(entries)
     if direct:
         cache.set(cache_key, direct, ANSWER_CACHE_TTL)
         return direct
+
     context_parts = []
     for entry in entries:
         excerpt = entry.content if entry.source_url in _BYPASS_URLS else smart_excerpt(entry.content, question)
@@ -530,14 +616,10 @@ def chat(question: str, history: list[dict] | None = None) -> str:
 
     context_block = "\n\n".join(context_parts) if context_parts else "Bilgi bulunamadı."
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": _get_system_prompt(lang)}]
     if history:
         messages.extend(history[-6:])
-
-    messages.append({"role": "user", "content": (
-        f"Aşağıdaki üniversite bilgilerini kullanarak soruyu yanıtla:\n\n"
-        f"{context_block}\n\nSoru: {question}"
-    )})
+    messages.append({"role": "user", "content": _user_prompt(lang, context_block, question)})
 
     try:
         resp = requests.post(
@@ -572,6 +654,7 @@ def chat_stream(question: str, history: list[dict] | None = None):
         yield golden
         return
 
+    lang = _detect_language(question)
     entries = retrieve_context(_retrieval_query(question, history))
 
     direct = _direct_response(entries)
@@ -587,13 +670,10 @@ def chat_stream(question: str, history: list[dict] | None = None):
 
     context_block = "\n\n".join(context_parts) if context_parts else "Bilgi bulunamadı."
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": _get_system_prompt(lang)}]
     if history:
         messages.extend(history[-6:])
-    messages.append({"role": "user", "content": (
-        f"Aşağıdaki üniversite bilgilerini kullanarak soruyu yanıtla:\n\n"
-        f"{context_block}\n\nSoru: {question}"
-    )})
+    messages.append({"role": "user", "content": _user_prompt(lang, context_block, question)})
 
     try:
         resp = requests.post(
