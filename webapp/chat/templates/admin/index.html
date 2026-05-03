@@ -1,0 +1,10 @@
+{% extends "admin/index.html" %}
+{% load analytics_tags %}
+
+{% block content %}
+    <!-- Analytics Dashboard Snippet -->
+    {% render_dashboard %}
+    
+    <!-- Render the default Django admin index content (app list, recent actions, etc) -->
+    {{ block.super }}
+{% endblock %}

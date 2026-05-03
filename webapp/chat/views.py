@@ -93,7 +93,8 @@ def send_message(request):
         return JsonResponse({"error": "Message too long (max 1000 characters)"}, status=400)
 
     session = _get_or_create_session(request)
-    ChatMessage.objects.create(session=session, role="user", content=question)
+    category = llm._classify_category(question)
+    ChatMessage.objects.create(session=session, role="user", content=question, category=category)
 
     all_msgs = list(session.messages.order_by("timestamp"))
     history = [{"role": m.role, "content": m.content} for m in all_msgs[:-1]]
@@ -130,7 +131,8 @@ def stream_message(request):
         return JsonResponse({"error": "Message too long"}, status=400)
 
     session = _get_or_create_session(request)
-    ChatMessage.objects.create(session=session, role="user", content=question)
+    category = llm._classify_category(question)
+    ChatMessage.objects.create(session=session, role="user", content=question, category=category)
 
     all_msgs = list(session.messages.order_by("timestamp"))
     history = [{"role": m.role, "content": m.content} for m in all_msgs[:-1]]
