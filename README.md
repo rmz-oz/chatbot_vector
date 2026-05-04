@@ -13,9 +13,9 @@ A sovereign, on-premises AI chatbot that answers natural-language questions abou
 | Member | Role | Contributions |
 |--------|------|---------------|
 | **Ramiz** | Backend | Django skeleton, DB models (`KnowledgeEntry`, `ChatSession`, `ChatMessage`), REST API endpoints, fixture-based data loading pipeline, `wait_for_db.py` service-readiness probe |
-| **Onur** | Web Scraping & Data | Five scraping pipelines (BeautifulSoup, Playwright, pdfplumber): 542 website pages, 78 PDFs, 1,783 Bologna/OBS catalogue pages, mevzuat.gov.tr regulatory data → 2,410+ total entries |
+| **Onur** | Web Scraping & Data, Analytics | Five scraping pipelines (BeautifulSoup, Playwright, pdfplumber): 542 website pages, 78 PDFs, 1,783 Bologna/OBS catalogue pages, mevzuat.gov.tr regulatory data → 2,410+ total entries; admin Analytics dashboard with per-category usage, response-time and feedback charts |
 | **Demir** | Docker & DevOps | `docker-compose.yml` authoring, pgvector/pg15 selection, `ollama-init` optimization, background embedding generation for fast Gunicorn startup |
-| **Deha** | AI Integration & RAG | Ollama HTTP integration, Hybrid RAG engine (vector + keyword), system prompts, regulation-aware logic, `smart_excerpt` sliding-window algorithm |
+| **Deha** | AI Integration & RAG | Ollama HTTP integration, Hybrid RAG engine (vector + keyword), system prompts, regulation-aware logic, `smart_excerpt` sliding-window algorithm, automatic question-language detection (TR/EN response routing) |
 
 ---
 
@@ -146,11 +146,17 @@ chatbot_vector/
     ├── wait_for_db.py
     ├── config/                     # Django settings, urls, wsgi
     ├── chat/                       # Core chat application
-    │   ├── models.py               # KnowledgeEntry, ChatSession, ChatMessage
+    │   ├── models.py               # KnowledgeEntry, ChatSession, ChatMessage (with category)
     │   ├── views.py                # Chat interface + REST API + SSE streaming
-    │   ├── llm.py                  # Ollama integration + Structured Hybrid RAG
+    │   ├── llm.py                  # Ollama integration + Structured Hybrid RAG + language detection
     │   ├── admin.py
-    │   └── templates/chat/index.html
+    │   ├── templatetags/
+    │   │   └── analytics_tags.py   # Aggregations for admin analytics dashboard
+    │   └── templates/
+    │       ├── chat/index.html
+    │       └── admin/
+    │           ├── index.html              # Overrides Django admin home
+    │           └── chat/dashboard_charts.html  # Category / response-time / feedback charts
     ├── scraper/                    # Data collection pipelines
     │   └── management/commands/
     │       ├── scrape_website.py           # BeautifulSoup crawler (~542 pages)
@@ -238,7 +244,7 @@ All entries stored with 768-dimensional `nomic-embed-text` embeddings in Postgre
 ### Structured Hybrid RAG (`llm.py`)
 
 **Category Routing**
-Questions are classified into one of 9 categories (fees, programs, admission, campus, contact, international, student_life, research, courses) using keyword matching. Vector search is then scoped to that category for higher precision.
+Questions are classified into one of 9 categories (fees, programs, admission, campus, contact, international, student_life, research, courses) using keyword matching. Vector search is then scoped to that category for higher precision. The detected category is persisted on each `ChatMessage` so the admin analytics dashboard can show per-topic usage over time.
 
 **Fallback Logic**
 - If category-filtered results score below `0.45`, retries across all categories
@@ -259,6 +265,9 @@ For known broad queries (programs list, scholarships, international application,
 
 **Golden Answer System**
 When a user upvotes a response, the question–answer pair is saved as a `golden` category `KnowledgeEntry` with a pre-computed embedding. On subsequent questions, the RAG pipeline checks golden entries first (before normal retrieval); if cosine similarity ≥ 0.90, the approved answer is returned directly without calling the LLM.
+
+**Automatic Language Detection**
+The incoming question's language is detected (Turkish vs. English) before the LLM call. The system prompt and response locale are matched to the question, so an English query like *"Where is Acibadem University located?"* returns an English answer while the same question in Turkish stays in Turkish — without any user-side switch.
 
 **Post-processing**
 - Non-Latin character filter (strips CJK/Arabic hallucinations, preserves ₺ and €)
@@ -290,6 +299,8 @@ Sliding 800-char window finds the densest keyword match within long documents. B
 - ✅ **Upvote/downvote feedback** — stored per message; admin stats page + downvote logging
 - ✅ **Golden answer system** — upvoted answers saved as curated entries with embeddings; similar future questions bypass LLM and return the approved answer directly (≥90% cosine similarity threshold)
 - ✅ **Admin knowledge entry editor** — edit content + auto embedding refresh on save
+- ✅ **Admin analytics dashboard** — admin home overrides Django default with response-time, per-category usage and feedback breakdown charts; powered by `chat/templatetags/analytics_tags.py` aggregating `ChatMessage.category` per turn
+- ✅ **Automatic language detection** — query language classified per turn; TR queries return Turkish answers, EN queries return English answers, with no UI toggle
 - ✅ **Rate limiting** — 10 req/min per IP via Redis; 429 errors shown as chat bubbles
 - ✅ **loaddata skip** — fixture only loaded on fresh DB; `docker restart` preserves live data
 - ✅ **Academic calendar redirect** — date queries directed to official site; no stale date hallucination
@@ -307,7 +318,7 @@ Sliding 800-char window finds the densest keyword match within long documents. B
 Question suggestion buttons on chat open; cache invalidation on entry edit; upgrade to `llama3.1:8b`
 
 **Medium-term**
-CI/CD via GitHub Actions; Kubernetes migration; benchmark vs `mistral:7b` / `llama3.1:8b` / `gemma2:9b`; auto language detection; source URL surfacing in responses
+CI/CD via GitHub Actions; Kubernetes migration; benchmark vs `mistral:7b` / `llama3.1:8b` / `gemma2:9b`; source URL surfacing in responses
 
 **Long-term**
 GPU acceleration (MPS/CUDA) targeting 2–3s response times; OBS integration for personalized student data; Elasticsearch + BM25 for Turkish morphological analysis
