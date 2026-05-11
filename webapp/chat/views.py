@@ -9,7 +9,7 @@ from django.shortcuts import render
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.views.decorators.http import require_POST
 
-from chat.models import ChatSession, ChatMessage, KnowledgeEntry
+from chat.models import ChatSession, ChatMessage, KnowledgeEntry, SessionDocumentChunk
 from chat import llm
 
 _feedback_log = logging.getLogger("chat.feedback")
@@ -100,7 +100,7 @@ def send_message(request):
     history = [{"role": m.role, "content": m.content} for m in all_msgs[:-1]]
 
     start = time.time()
-    answer = llm.chat(question, history)
+    answer = llm.chat(question, history, session=session)
     elapsed_ms = int((time.time() - start) * 1000)
 
     msg = ChatMessage.objects.create(
@@ -140,7 +140,7 @@ def stream_message(request):
     def event_stream():
         full_answer = []
         start = time.time()
-        for token in llm.chat_stream(question, history):
+        for token in llm.chat_stream(question, history, session=session):
             full_answer.append(token)
             yield f"data: {json.dumps({'token': token})}\n\n"
 
@@ -257,3 +257,72 @@ def message_feedback(request, message_id):
         return JsonResponse({"status": "ok"})
     except ChatMessage.DoesNotExist:
         return JsonResponse({"error": "not found"}, status=404)
+
+
+@require_POST
+def upload_document(request):
+    if _check_rate_limit(request):
+        return JsonResponse({"error": "Çok fazla istek gönderdiniz. Lütfen bir dakika bekleyin."}, status=429)
+
+    file_obj = request.FILES.get("file")
+    if not file_obj:
+        return JsonResponse({"error": "No file uploaded"}, status=400)
+
+    filename = file_obj.name.lower()
+    if not (filename.endswith(".pdf") or filename.endswith(".txt")):
+        return JsonResponse({"error": "Only PDF and TXT files are supported"}, status=400)
+
+    session = _get_or_create_session(request)
+
+    # Read text
+    text = ""
+    try:
+        if filename.endswith(".pdf"):
+            import pdfplumber
+            with pdfplumber.open(file_obj) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
+        else:
+            text = file_obj.read().decode("utf-8")
+    except Exception as e:
+        logger.error("Document upload parse error: %s", e)
+        return JsonResponse({"error": "Could not parse document"}, status=400)
+
+    text = text.strip()
+    if not text:
+        return JsonResponse({"error": "Document is empty or text could not be extracted"}, status=400)
+
+    # Chunk the text into roughly 1000 character pieces
+    chunk_size = 1000
+    overlap = 200
+    chunks = []
+    
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        chunks.append(chunk)
+        start += chunk_size - overlap
+
+    # Delete existing chunks for this session so we only query the new document (or we could keep them, but user said "sadece o dosya içeriği")
+    session.document_chunks.all().delete()
+
+    created_chunks = 0
+    for c in chunks:
+        # Get embedding
+        embedding = llm.get_embedding(c)
+        if embedding:
+            SessionDocumentChunk.objects.create(
+                session=session,
+                file_name=file_obj.name,
+                content=c,
+                embedding=embedding
+            )
+            created_chunks += 1
+
+    if created_chunks == 0:
+        return JsonResponse({"error": "Failed to process document embeddings"}, status=500)
+
+    return JsonResponse({"status": "ok", "filename": file_obj.name, "chunks": created_chunks})

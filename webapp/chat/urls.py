@@ -9,6 +9,7 @@ urlpatterns = [
     path("api/sessions/",           views.list_sessions,    name="list_sessions"),
     path("api/sessions/switch/",    views.switch_session,   name="switch_session"),
     path("api/sessions/new/",       views.new_session,      name="new_session"),
+    path("api/upload/",             views.upload_document,  name="upload_document"),
     path("chat/clear/",             views.clear_history,    name="clear_history"),
     path("api/status/",             views.api_status,       name="api_status"),
 ]

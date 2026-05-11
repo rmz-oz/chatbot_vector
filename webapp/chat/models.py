@@ -61,3 +61,17 @@ class ChatMessage(models.Model):
 
     def __str__(self):
         return f"{self.role}: {self.content[:60]}"
+
+
+class SessionDocumentChunk(models.Model):
+    session    = models.ForeignKey(ChatSession, on_delete=models.CASCADE, related_name="document_chunks")
+    file_name  = models.CharField(max_length=255)
+    content    = models.TextField()
+    embedding  = VectorField(dimensions=768, null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"{self.file_name} (Chunk)"

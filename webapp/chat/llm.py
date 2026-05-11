@@ -20,7 +20,7 @@ import requests
 from django.conf import settings
 from django.core.cache import cache
 
-from chat.models import KnowledgeEntry
+from chat.models import KnowledgeEntry, SessionDocumentChunk
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +240,40 @@ def _do_retrieve(question: str, words: list[str], vector: list[float] | None,
     return [e for _, e in combined[:limit]], best_score
 
 
+def _do_retrieve_session_doc(question: str, vector: list[float] | None,
+                             session, limit: int, pool: int) -> tuple[list, float]:
+    """Retrieve exclusively from the user's uploaded document chunks."""
+    from pgvector.django import CosineDistance
+
+    if not vector:
+        return [], 0.0
+
+    qs = session.document_chunks.exclude(embedding=None).annotate(
+        dist=CosineDistance("embedding", vector)
+    ).order_by("dist")[:pool]
+
+    combined = []
+    for chunk in qs:
+        # Distance to score
+        score = 1.0 - float(chunk.dist)
+        
+        # We need to map chunk to a dummy KnowledgeEntry-like object so that
+        # the rest of the pipeline (which expects .content, .title, .source_url) works.
+        class DummyEntry:
+            def __init__(self, c, s):
+                self.pk = c.pk
+                self.title = c.file_name
+                self.content = c.content
+                self.source_url = f"file://{c.file_name}"
+                self.score = s
+        
+        combined.append((score, DummyEntry(chunk, score)))
+
+    combined.sort(key=lambda t: -t[0])
+    best_score = combined[0][0] if combined else 0.0
+    return [e for _, e in combined[:limit]], best_score
+
+
 # If category-filtered best score is below this, retry without category filter.
 _CATEGORY_SCORE_THRESHOLD = 0.45
 
@@ -349,17 +383,25 @@ _FEES_RE = re.compile(
 )
 
 
-def retrieve_context(question: str) -> list:
+def retrieve_context(question: str, session=None) -> list:
     """
     Hybrid search: category routing → vector + keyword, with fallback.
-    If category-filtered results are low-confidence, retries without filter.
-    If global results are still low-confidence, returns empty (no context).
+    If session has uploaded documents, ONLY search those documents.
     """
     limit    = settings.RAG_MAX_ENTRIES
     pool     = limit * 10
+    vector   = get_embedding(question)
+
+    if session and session.document_chunks.exists():
+        entries, best = _do_retrieve_session_doc(question, vector, session, limit, pool)
+        # For custom documents, we might have lower relevance threshold or just return the best chunks
+        if best < 0.20:
+            logger.debug("Low relevance (%.2f) for doc '%s'", best, question[:60])
+            return []
+        return entries
+
     words    = [_normalize_tr(w) for w in question.lower().split() if len(w) > 2]
     category = _classify_category(question)
-    vector   = get_embedding(question)
 
     if category:
         entries, best = _do_retrieve(question, words, vector, category, limit, pool)
@@ -376,6 +418,7 @@ def retrieve_context(question: str) -> list:
         return []
 
     return _inject_summary(question, entries, limit)
+
 
 
 def _inject_summary(question: str, entries: list, limit: int) -> list:
@@ -602,27 +645,33 @@ def _format_sources(entries: list) -> str:
     return "\n".join(parts)
 
 
-def chat(question: str, history: list[dict] | None = None) -> str:
+def chat(question: str, history: list[dict] | None = None, session=None) -> str:
     """Send question + vector-retrieved context to Ollama and return the answer."""
     cache_key = "ans:" + hashlib.md5(question.encode()).hexdigest()
-    cached = cache.get(cache_key)
-    if cached:
-        return cached
+    
+    # Do not use cache if there is a document in the session, as context is dynamic
+    use_cache = not (session and session.document_chunks.exists())
+    
+    if use_cache:
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
 
     golden = _find_golden_answer(question)
-    if golden:
+    if golden and use_cache:
         cache.set(cache_key, golden, ANSWER_CACHE_TTL)
         return golden
 
     lang = _detect_language(question)
-    entries = retrieve_context(_retrieval_query(question, history))
+    entries = retrieve_context(_retrieval_query(question, history), session=session)
 
     direct = _direct_response(entries)
     if direct:
         sources_text = _format_sources(entries)
         if sources_text:
             direct += sources_text
-        cache.set(cache_key, direct, ANSWER_CACHE_TTL)
+        if use_cache:
+            cache.set(cache_key, direct, ANSWER_CACHE_TTL)
         return direct
 
     context_parts = []
@@ -657,7 +706,8 @@ def chat(question: str, history: list[dict] | None = None) -> str:
         if sources_text:
             answer += sources_text
 
-        cache.set(cache_key, answer, ANSWER_CACHE_TTL)
+        if use_cache:
+            cache.set(cache_key, answer, ANSWER_CACHE_TTL)
         return answer
 
     except requests.exceptions.ConnectionError:
@@ -669,15 +719,18 @@ def chat(question: str, history: list[dict] | None = None) -> str:
         return "Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin."
 
 
-def chat_stream(question: str, history: list[dict] | None = None):
+def chat_stream(question: str, history: list[dict] | None = None, session=None):
     """Generator: yields text chunks from Ollama stream for SSE."""
-    golden = _find_golden_answer(question)
-    if golden:
-        yield golden
-        return
+    use_cache = not (session and session.document_chunks.exists())
+    
+    if use_cache:
+        golden = _find_golden_answer(question)
+        if golden:
+            yield golden
+            return
 
     lang = _detect_language(question)
-    entries = retrieve_context(_retrieval_query(question, history))
+    entries = retrieve_context(_retrieval_query(question, history), session=session)
 
     direct = _direct_response(entries)
     if direct:
