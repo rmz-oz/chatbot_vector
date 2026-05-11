@@ -476,7 +476,6 @@ Yalnızca verilen bağlam bilgilerini kullanarak Türkçe yanıt ver.
 - Bağlamda cevap yoksa SADECE şunu yaz: "Bu konuda elimde bilgi bulunmuyor, lütfen üniversiteyle iletişime geçin." Başka hiçbir şey ekleme.
 - Bilgi bulunamadığında bağlamda geçen program veya bölüm adlarını ASLA yanıta ekleme. Kullanıcı sormadıysa program adı belirtme.
 - Kısa, net ve bilgilendirici cevap ver. Ancak bağlamda bir liste veya tablo varsa listedeki TÜM maddeleri eksiksiz yaz, kısaltma yapma.
-- Bağlamdaki URL'leri olduğu gibi aktar, kısaltma veya değiştirme yapma. URL'leri tam hâliyle yaz (örneğin https://www.acibadem.edu.tr/...).
 - Kesinlikle var olmayan veya uydurulmuş Türkçe kelimeler kullanma.
 - Bağlamdaki kişi isimlerini, unvanları ve adresleri AYNEN kullan. Hiçbir ismi değiştirme, gizleme veya [Adı] gibi yer tutucu ile değiştirme.
 - Yönetmelik veya kural içeren cevaplarda sonuna ekle: "Kesin bilgi için danışmanınıza başvurun."
@@ -495,7 +494,6 @@ Answer questions using ONLY the provided context. Always respond in English.
 - If the context does not contain the answer, write ONLY: "I don't have information on this topic. Please contact the university directly."
 - Do not mention program or department names from the context unless the user specifically asked about them.
 - Keep answers concise, clear, and informative. If the context contains a list or table, include ALL items without abbreviation.
-- Include URLs exactly as provided in the context, without shortening or modifying them (e.g. https://www.acibadem.edu.tr/...).
 - Use person names, titles, and addresses EXACTLY as they appear in the context. Never substitute with placeholders like [Name].
 - For answers involving regulations or rules, append: "For definitive information, please consult your academic advisor."
 - Do not generalise a rule that applies to one program to the entire university.
@@ -588,6 +586,22 @@ def _find_golden_answer(question: str) -> str | None:
     return None
 
 
+def _format_sources(entries: list) -> str:
+    urls = []
+    for e in entries:
+        url = e.source_url
+        if url and not url.startswith("golden://"):
+            urls.append(url)
+    urls = list(dict.fromkeys(urls))
+    if not urls:
+        return ""
+    
+    parts = ["\n\nKaynaklar:"]
+    for u in urls:
+        parts.append(f"• {u}")
+    return "\n".join(parts)
+
+
 def chat(question: str, history: list[dict] | None = None) -> str:
     """Send question + vector-retrieved context to Ollama and return the answer."""
     cache_key = "ans:" + hashlib.md5(question.encode()).hexdigest()
@@ -605,6 +619,9 @@ def chat(question: str, history: list[dict] | None = None) -> str:
 
     direct = _direct_response(entries)
     if direct:
+        sources_text = _format_sources(entries)
+        if sources_text:
+            direct += sources_text
         cache.set(cache_key, direct, ANSWER_CACHE_TTL)
         return direct
 
@@ -635,6 +652,11 @@ def chat(question: str, history: list[dict] | None = None) -> str:
         resp.raise_for_status()
         raw    = resp.json()["message"]["content"]
         answer = _fix_vowel_harmony(_NON_LATIN.sub("", raw)).strip()
+
+        sources_text = _format_sources(entries)
+        if sources_text:
+            answer += sources_text
+
         cache.set(cache_key, answer, ANSWER_CACHE_TTL)
         return answer
 
@@ -660,6 +682,9 @@ def chat_stream(question: str, history: list[dict] | None = None):
     direct = _direct_response(entries)
     if direct:
         yield direct
+        sources_text = _format_sources(entries)
+        if sources_text:
+            yield sources_text
         return
 
     context_parts = []
@@ -698,6 +723,9 @@ def chat_stream(question: str, history: list[dict] | None = None):
                 if token:
                     yield token
                 if chunk.get("done"):
+                    sources_text = _format_sources(entries)
+                    if sources_text:
+                        yield sources_text
                     break
             except _json.JSONDecodeError:
                 continue
